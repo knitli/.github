@@ -1,33 +1,44 @@
 # 🧵 Knitli
 
-**We design tools for agents and humans to be better at their jobs**. 🧵
+**We build the context layer for AI — infrastructure that makes agents efficient, predictable, and human-friendly.** 🧵
 
 Knitli is rethinking how humans and AI work together.
-AI agents today are powerful but wasteful — constantly re-parsing the same information, burning tokens on repetitive tasks, and struggling with context.
+Today’s AI agents are powerful but wasteful — constantly re-reading the same information, burning tokens on repetitive tasks (💲💲🪙), and struggling with context.
 
-We’re building **the context layer**:
+We’re building tools that give **AI agents and humans the right context** — so both can work faster, smarter, and with less waste.
 
-* Gives AI agents exactly what they need, up front.
-* Offloads tasks they’re bad at.
-* Lets them focus on what they do best.
+---
 
-The result: **faster work, lower cost, less waste** — starting with software development but designed for everyone.
+## 🗻 Our Vision
+
+A world where AI fits seamlessly into human workflows. No prompt engineering. No repetitive context or information overload. **Just tools that make sense for humans *and* agents.** 🤖👩‍🎨
+
+---
 
 ## 🌟 What We’re About
 
-* **No prompt engineering required** – tools that just work.
-* **Design first, empathy always** – technology should serve humans and solve real problems without causing new ones.
-* **Open collaboration** – we’re building in public as much as possible. Our core is and will always be open source. 
+* **Context is king** – everything starts with the right information at the right time.
+* **Humans first** – design for people, not prompts. Technology should solve real problems without causing new ones.
+* **Build in the open** – our core is and will always be open source.
+
+---
 
 ## 🛠️ Current Projects
 
-* **Context Layer SDK** – Starting with:
-  *  [CodeWeaver](https://github.com/knitli/codeweaver-mcp) a tailored context delivery platform pretending to be an MCP server.
-  *  [Thread](https://github.com/knitli/thread) a platform agnostic, real-time, codebase intelligence :brain: tool using graphs and abstract syntax trees to keep agents continuously and correctly informed.
-* **UI Experiments** – making powerful tools feel intuitive for non-technical users... for, later.
+* **Context Layer SDK** – core libraries and APIs to feed structured, predictive, context to AI agents.
+
+  * [**CodeWeaver**](https://github.com/knitli/codeweaver-mcp) – a tailored context delivery platform, appearing as an MCP server.
+  * [**Thread**](https://github.com/knitli/thread) – a platform-agnostic, real-time codebase intelligence engine using graphs + ASTs to keep agents continuously and correctly informed.
+* **UI Experiments** – early explorations to make powerful tools intuitive for non-technical users. 
+
+---
 
 ## 🤝 How to Get Involved
 
 * **Star** ⭐ or watch this org, and our repos.
 * Collaboration, ideas, and feedback welcome! Post an issue, start a discussion, or email us.
 * Reach out: [website](https://knitli.com) • [LinkedIn](https://www.linkedin.com/company/knitli)
+
+---
+
+*Knitli is currently in active development. Interested in collaborating, sponsoring, or contributing? Get in touch.*
