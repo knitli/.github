@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable CLA check workflow for all Knitli repositories
+#
+# This workflow checks if PR contributors have signed the CLA and stores
+# signatures centrally in knitli/.github/cla-signatures/
+#
+# Usage in your repository:
+#   uses: knitli/.github/.github/workflows/cla-check.yml@main
+#   with:
+#     repo_name: "codeweaver"  # or "thread", etc.
+#     cla_document_url: "https://github.com/knitli/codeweaver/blob/main/CLA.md"  # optional
+#   secrets: inherit
+
+name: CLA Check
+
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: 'Repository name for signature file (e.g., "codeweaver")'
+        required: true
+        type: string
+      cla_document_url:
+        description: 'URL to the CLA document'
+        required: false
+        type: string
+        default: ''
+      branch:
+        description: 'Branch for storing signatures in .github repo'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      CLA_ACCESS_TOKEN:
+        description: 'Personal access token with write access to knitli/.github repo'
+        required: true
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  check-cla:
+    runs-on: ubuntu-latest
+    outputs:
+      is_member: ${{ steps.check-membership.outputs.is_member }}
+      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
+    steps:
+      - name: Check Repository
+        id: check-repo
+        run: |
+          repo="${{ github.repository }}"
+          if [[ ! $repo =~ ^knitli/ ]]; then
+            echo "This action is only for Knitli repositories (found: $repo)"
+            echo "is_knitli_repo=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "is_knitli_repo=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check Membership
+        id: check-membership
+        if: steps.check-repo.outputs.is_knitli_repo == 'true'
+        run: |
+          # Determine the author based on event type
+          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+            author="${{ github.event.pull_request.user.login }}"
+          else
+            author="${{ github.event.issue.user.login }}"
+          fi
+
+          # Fallback to actor if author is empty
+          if [[ -z "$author" ]]; then
+            author="${{ github.actor }}"
+          fi
+
+          echo "Checking membership for: $author"
+
+          # Check if user is a Knitli org member
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/orgs/knitli/members/$author")
+
+          if [ "$response" == "204" ]; then
+            echo "is_member=true" >> "$GITHUB_OUTPUT"
+            echo "should_run_cla=false" >> "$GITHUB_OUTPUT"
+            echo "✅ User $author is a Knitli org member - CLA not required"
+          else
+            echo "is_member=false" >> "$GITHUB_OUTPUT"
+            echo "should_run_cla=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️  User $author requires CLA signature"
+          fi
+
+  cla-assistant:
+    needs: check-cla
+    if: needs.check-cla.outputs.should_run_cla == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine CLA Document URL
+        id: cla-url
+        run: |
+          # Use provided URL or construct default from repo
+          if [[ -n "${{ inputs.cla_document_url }}" ]]; then
+            url="${{ inputs.cla_document_url }}"
+          else
+            url="https://github.com/${{ github.repository }}/blob/main/CONTRIBUTORS_LICENSE_AGREEMENT.md"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Using CLA document: $url"
+
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
+        with:
+          # Remote repository configuration
+          remote-organization-name: knitli
+          remote-repository-name: .github
+          path-to-signatures: cla-signatures/${{ inputs.repo_name }}.json
+
+          # CLA document location
+          path-to-document: ${{ steps.cla-url.outputs.url }}
+
+          # Branch for signatures
+          branch: ${{ inputs.branch }}
+
+          # Bot allowlist (users who don't need to sign)
+          allowlist: |
+            codegen-sh[bot],dependabot[bot],github-actions[bot],actions-user,changeset-bot,claude[bot],copilot
+
+          # Commit messages
+          create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
+          signed-commit-message: '${{ github.event.pull_request.user.login || github.event.issue.user.login }} signed the CLA for ${{ inputs.repo_name }} PR #${{ github.event.pull_request.number || github.event.issue.number }}'
+
+          # Custom PR comments
+          custom-notsigned-prcomment: |
+            👋 Hey @${{ github.event.pull_request.user.login || github.event.issue.user.login }},
+
+            ## Thanks for your contribution to Thread! 🧵
+
+            ### You need to agree to the CLA first... 🖊️
+
+            Before we can accept your contribution, **you need to agree to our Contributor License Agreement (CLA)**.
+
+            ### To agree to the CLA, please comment:
+
+            > I read the contributors license agreement and I agree to it.
+
+            Those exact words are important[^1], so please don't change them. 😉
+
+            You can read the full CLA here: [Contributor License Agreement](${{ steps.cla-url.outputs.url }})
+
+            [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.
+
+          custom-pr-sign-comment: |
+            ✅ @${{ github.event.pull_request.user.login || github.event.issue.user.login }} has signed the CLA.
+
+          custom-allsigned-prcomment: |
+            ## 🚀 All contributors have signed the CLA! 👍
+
+            ### Thanks for your contribution to Thread! 🧵
+
+            Your contribution is ready to be reviewed and merged[^1]. 🎉
+
+            [^1]: Pending other CI checks, of course. 😉
