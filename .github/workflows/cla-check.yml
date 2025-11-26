@@ -132,7 +132,7 @@ jobs:
 
           # Bot allowlist (users who don't need to sign)
           allowlist: |
-            codegen-sh[bot],dependabot[bot],github-actions[bot],actions-user,changeset-bot,claude[bot],copilot
+            Claude,Copilot,Codegen-sh,Dependabot,Github-Actions,codegen-sh[bot],dependabot[bot],github-actions[bot],actions-user,changeset-bot,claude[bot],copilot
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
