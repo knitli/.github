@@ -142,7 +142,7 @@ jobs:
           custom-notsigned-prcomment: |
             👋 Hey @${{ github.event.pull_request.user.login || github.event.issue.user.login }},
 
-            ## Thanks for your contribution to Thread! 🧵
+            ## Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
 
             ### You need to agree to the CLA first... 🖊️
 
@@ -164,7 +164,7 @@ jobs:
           custom-allsigned-prcomment: |
             ## 🚀 All contributors have signed the CLA! 👍
 
-            ### Thanks for your contribution to Thread! 🧵
+            ### Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
 
             Your contribution is ready to be reviewed and merged[^1]. 🎉
 
