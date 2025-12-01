@@ -63,37 +63,108 @@ jobs:
           fi
           echo "is_knitli_repo=true" >> "$GITHUB_OUTPUT"
 
-      - name: Check Membership
+      - name: Check Membership (check all PR committers)
         id: check-membership
         if: steps.check-repo.outputs.is_knitli_repo == 'true'
         run: |
-          # Determine the author based on event type
-          if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
-            author="${{ github.event.pull_request.user.login }}"
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          OWNER="$(echo "$REPO" | cut -d/ -f1)"
+          REPO_NAME="$(echo "$REPO" | cut -d/ -f2)"
+
+          # Determine PR number or fallback to actor
+          PR_NUMBER=""
+          if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+            PR_NUMBER="$(jq -r '.pull_request.number // .issue.number // empty' "$GITHUB_EVENT_PATH")" || true
+          fi
+
+          # Fallback to actor if we can't find PR number
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "No PR number found in event; falling back to single author check"
+            if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+              AUTHOR="${{ github.event.pull_request.user.login }}"
+            else
+              AUTHOR="${{ github.event.issue.user.login }}"
+            fi
+            if [[ -z "$AUTHOR" ]]; then
+              AUTHOR="${{ github.actor }}"
+            fi
+            USERS="$AUTHOR"
           else
-            author="${{ github.event.issue.user.login }}"
+            echo "PR number detected: $PR_NUMBER"
+            # Fetch commits for PR and collect commit authors/committers
+            COMMITS_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/commits")
+            # Extract possible GitHub logins (author.login or committer.login) and unique them
+            USERS=$(echo "$COMMITS_JSON" | jq -r '.[] | .author.login // .committer.login // empty' | sed '/^$/d' | sort -u || true)
+            # If no login found (e.g., imported email-only commits), fall back to PR author/actor
+            if [[ -z "$USERS" ]]; then
+              echo "No commit-linked GitHub users found; falling back to PR author/actor"
+              if [[ -n "${{ github.event.pull_request.user.login || github.event.issue.user.login }}" ]]; then
+                USERS="${{ github.event.pull_request.user.login || github.event.issue.user.login }}"
+              else
+                USERS="${{ github.actor }}"
+              fi
+            fi
           fi
 
-          # Fallback to actor if author is empty
-          if [[ -z "$author" ]]; then
-            author="${{ github.actor }}"
-          fi
+          echo "Potential committers found: "
+          for u in $USERS; do echo " - $u"; done
 
-          echo "Checking membership for: $author"
+          # Bot/allowlist detection (case-insensitive)
+          is_allowed_bot() {
+            local u_lower="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+            # Patterns: endswith [bot], contains bot, or well-known automation accounts
+            if [[ "$u_lower" =~ \[bot\]$ ]] || \
+               [[ "$u_lower" =~ bot$ ]] || \
+               [[ "$u_lower" =~ ^dependabot ]] || \
+               [[ "$u_lower" =~ ^github-actions ]] || \
+               [[ "$u_lower" =~ ^changeset-bot ]] || \
+               [[ "$u_lower" =~ ^claude ]] || \
+               [[ "$u_lower" =~ ^copilot ]] || \
+               [[ "$u_lower" =~ ^codegen-sh ]] || \
+               [[ "$u_lower" =~ ^sourcery ]] || \
+               [[ "$u_lower" =~ ^github-code-quality ]]; then
+              return 0
+            fi
+            return 1
+          }
 
-          # Check if user is a Knitli org member
-          response=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/orgs/knitli/members/$author")
+          # Check each user for org membership or allowlist
+          NEEDS_CLA=()
+          for user in $USERS; do
+            if [[ -z "$user" ]]; then
+              NEEDS_CLA+=("<unknown>")
+              continue
+            fi
 
-          if [ "$response" == "204" ]; then
+            if is_allowed_bot "$user"; then
+              echo "Skipping bot/allowlisted account: $user"
+              continue
+            fi
+
+            # Query org membership API
+            response=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/orgs/knitli/members/$user")
+
+            if [ "$response" == "204" ]; then
+              echo "User $user is a Knitli org member"
+              continue
+            else
+              echo "User $user is NOT a Knitli org member and may require CLA"
+              NEEDS_CLA+=("$user")
+            fi
+          done
+
+          if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
+            echo "All committers are org members or allowed bots; CLA not required"
             echo "is_member=true" >> "$GITHUB_OUTPUT"
             echo "should_run_cla=false" >> "$GITHUB_OUTPUT"
-            echo "✅ User $author is a Knitli org member - CLA not required"
           else
+            echo "The following committers need to sign the CLA: ${NEEDS_CLA[*]}"
             echo "is_member=false" >> "$GITHUB_OUTPUT"
             echo "should_run_cla=true" >> "$GITHUB_OUTPUT"
-            echo "⚠️  User $author requires CLA signature"
           fi
 
   cla-assistant:
