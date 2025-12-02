@@ -68,6 +68,8 @@ jobs:
       - name: Check Membership (check all PR committers)
         id: check-membership
         if: steps.check-repo.outputs.is_knitli_repo == 'true'
+        env:
+          CLA_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
@@ -146,17 +148,29 @@ jobs:
               continue
             fi
 
-            # Query org membership API
-            response=$(curl -s -o /dev/null -w "%{http_code}" \
+            # Check if user is a repository collaborator (works with GITHUB_TOKEN)
+            # This API returns 204 if user has push access, 404 otherwise
+            collab_response=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/collaborators/$user")
+
+            if [ "$collab_response" == "204" ]; then
+              echo "User $user is a repository collaborator"
+              EXEMPT_USERS+=("$user (collaborator)")
+              continue
+            fi
+
+            # Fallback: Check org membership using CLA_ACCESS_TOKEN (has org:read scope)
+            org_response=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $CLA_ACCESS_TOKEN" \
               "https://api.github.com/orgs/knitli/members/$user")
 
-            if [ "$response" == "204" ]; then
+            if [ "$org_response" == "204" ]; then
               echo "User $user is a Knitli org member"
               EXEMPT_USERS+=("$user (org member)")
               continue
             else
-              echo "User $user is NOT a Knitli org member and may require CLA"
+              echo "User $user is NOT a collaborator or org member and may require CLA"
               NEEDS_CLA+=("$user")
             fi
           done
