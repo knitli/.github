@@ -68,6 +68,8 @@ jobs:
       - name: Check Membership (check all PR committers)
         id: check-membership
         if: steps.check-repo.outputs.is_knitli_repo == 'true'
+        env:
+          CLA_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
@@ -146,17 +148,42 @@ jobs:
               continue
             fi
 
-            # Query org membership API
-            response=$(curl -s -o /dev/null -w "%{http_code}" \
+            # Check if user is a repository collaborator (works with GITHUB_TOKEN)
+            # This API returns 204 if user has push access, 404 otherwise
+            collab_response=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/orgs/knitli/members/$user")
+              "https://api.github.com/repos/$REPO/collaborators/$user")
 
-            if [ "$response" == "204" ]; then
-              echo "User $user is a Knitli org member"
-              EXEMPT_USERS+=("$user (org member)")
+            if [ "$collab_response" == "204" ]; then
+              echo "User $user is a repository collaborator"
+              EXEMPT_USERS+=("$user (collaborator)")
               continue
+            fi
+
+            # Fallback: Check org membership using CLA_ACCESS_TOKEN (has org:read scope)
+            # Only attempt if CLA_ACCESS_TOKEN is available
+            if [ -n "$CLA_ACCESS_TOKEN" ]; then
+              org_response=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $CLA_ACCESS_TOKEN" \
+                "https://api.github.com/orgs/knitli/members/$user")
+
+              if [ "$org_response" == "204" ]; then
+                echo "User $user is a Knitli org member"
+                EXEMPT_USERS+=("$user (org member)")
+                continue
+              elif [ "$org_response" == "404" ] || [ "$org_response" == "302" ]; then
+                # 404 = not a member, 302 = requester is not an org member (can't see membership)
+                echo "User $user is NOT a collaborator or org member and may require CLA"
+                NEEDS_CLA+=("$user")
+              else
+                # API error (rate limit, network issue, etc.) - fail open and require CLA
+                echo "Warning: Org membership check for $user returned $org_response, requiring CLA as precaution"
+                NEEDS_CLA+=("$user")
+              fi
             else
-              echo "User $user is NOT a Knitli org member and may require CLA"
+              # No CLA_ACCESS_TOKEN available, can't check org membership
+              echo "Warning: CLA_ACCESS_TOKEN not available, cannot check org membership for $user"
+              echo "User $user is NOT a collaborator and may require CLA"
               NEEDS_CLA+=("$user")
             fi
           done
