@@ -228,7 +228,7 @@ jobs:
             
             const existingComment = comments.data.find(c => 
               c.user.login === 'github-actions[bot]' && 
-              c.body.includes('CLA Check Passed')
+              c.body.includes('## ✅ CLA Check Passed')
             );
             
             if (existingComment) {
