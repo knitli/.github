@@ -38,10 +38,11 @@ jobs:
 - `CLA_ACCESS_TOKEN`: Organization-level secret with write access to `knitli/.github` repo
 
 **Features**:
-- Checks org membership automatically
+- Checks org membership automatically - org members are exempt from CLA
+- Automatically exempts bots and automation accounts (e.g., `claude`, `copilot`, `dependabot`)
+- Posts clear success message when all contributors are exempt
 - Stores signatures in `knitli/.github/cla-signatures/{repo_name}.json`
-- Customizable bot allowlist
-- Friendly PR comments with clear instructions
+- Friendly PR comments with clear instructions for non-exempt contributors
 
 **Examples**:
 
