@@ -250,7 +250,26 @@ jobs:
               });
               console.log('Posted CLA exempt comment');
             }
-
+            
+            // Remove any existing CLA Assistant comments to avoid confusion
+            const claAssistantIdentifiers = [
+              'Please sign the Contributor License Agreement (CLA)',
+              'Contributor License Agreement required',
+              'CLA Assistant'
+            ];
+            for (const comment of comments.data) {
+              if (
+                comment.user.login === 'github-actions[bot]' &&
+                claAssistantIdentifiers.some(id => comment.body.includes(id))
+              ) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+                console.log('Deleted outdated CLA Assistant comment (id: ' + comment.id + ')');
+              }
+            }
   cla-assistant:
     needs: check-cla
     if: needs.check-cla.outputs.should_run_cla == 'true'
