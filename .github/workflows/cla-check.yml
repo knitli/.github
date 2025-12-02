@@ -205,7 +205,7 @@ jobs:
             }
             
             // Format the exempt users list
-            const userList = exemptUsers.map(u => '- ✅ ' + u).join('\n');
+            const userList = exemptUsers.map(u => `- ✅ ${u}`).join('\n');
             
             const body = [
               '## ✅ CLA Check Passed',
