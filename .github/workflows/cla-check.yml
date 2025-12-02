@@ -49,6 +49,7 @@ jobs:
   check-cla:
     runs-on: ubuntu-latest
     outputs:
+      is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
       should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
@@ -182,7 +183,7 @@ jobs:
   # Post success comment when all committers are exempt (org members or bots)
   post-exempt-status:
     needs: check-cla
-    if: needs.check-cla.outputs.should_run_cla == 'false'
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Post CLA Exempt Comment
