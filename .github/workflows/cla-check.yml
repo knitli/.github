@@ -295,21 +295,14 @@ jobs:
             bot*
             *bot
             *[bot]
-            *Bot
             claude*
-            Claude*
             copilot*
-            Copilot*
             dependabot*
-            Dependabot*
             github-actions*
-            Github-Actions*
             codegen-sh*
-            Codegen-sh*
             changeset-bot*
             actions-user
             sourcery*
-            Sourcery*
             github-code-quality*
 
           # Commit messages
