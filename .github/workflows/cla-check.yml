@@ -161,7 +161,12 @@ jobs:
           done
 
           # Output exempt users as JSON array for later use
-          EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
+          # Handle empty array case by checking length first
+          if [ ${#EXEMPT_USERS[@]} -eq 0 ]; then
+            EXEMPT_JSON='[]'
+          else
+            EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
+          fi
           echo "exempt_users=$EXEMPT_JSON" >> "$GITHUB_OUTPUT"
 
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
@@ -281,9 +286,31 @@ jobs:
           branch: ${{ inputs.branch }}
 
           # Bot allowlist (users who don't need to sign)
-          # Using wildcards (*) for pattern matching - the action supports basic glob patterns
-          # Note: This list should match the is_allowed_bot() function in check-membership step
-          allowlist: bot*,*[bot],*Bot,claude*,Claude*,copilot*,Copilot*,dependabot*,Dependabot*,github-actions*,Github-Actions*,codegen-sh*,Codegen-sh*,changeset-bot*,actions-user,sourcery*,Sourcery*,github-code-quality*
+          # This is a fallback safety net - the check-membership step filters bots/org members first.
+          # Using glob patterns (*) supported by the CLA Assistant action.
+          # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
+          # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
+          # so there may be minor differences. The check-membership step is the primary filter.
+          allowlist: |
+            bot*
+            *bot
+            *[bot]
+            *Bot
+            claude*
+            Claude*
+            copilot*
+            Copilot*
+            dependabot*
+            Dependabot*
+            github-actions*
+            Github-Actions*
+            codegen-sh*
+            Codegen-sh*
+            changeset-bot*
+            actions-user
+            sourcery*
+            Sourcery*
+            github-code-quality*
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
