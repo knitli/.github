@@ -216,7 +216,7 @@ jobs:
               '',
               '**Knitli organization members and recognized bots do not need to sign the CLA.**',
               '',
-              'Thanks for your contribution to ' + repoName + '! 🧵'
+              `Thanks for your contribution to ${repoName}! 🧵`
             ].join('\n');
             
             // Check if we already posted a comment to avoid duplicates
