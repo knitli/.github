@@ -49,8 +49,10 @@ jobs:
   check-cla:
     runs-on: ubuntu-latest
     outputs:
+      is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
       should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
+      exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
     steps:
       - name: Check Repository
         id: check-repo
@@ -69,8 +71,6 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
-          OWNER="$(echo "$REPO" | cut -d/ -f1)"
-          REPO_NAME="$(echo "$REPO" | cut -d/ -f2)"
 
           # Determine PR number or fallback to actor
           PR_NUMBER=""
@@ -113,7 +113,8 @@ jobs:
 
           # Bot/allowlist detection (case-insensitive)
           is_allowed_bot() {
-            local u_lower="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+            local u_lower
+            u_lower="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
             # Patterns: endswith [bot], contains bot, or well-known automation accounts
             if [[ "$u_lower" =~ \[bot\]$ ]] || \
                [[ "$u_lower" =~ bot$ ]] || \
@@ -132,6 +133,7 @@ jobs:
 
           # Check each user for org membership or allowlist
           NEEDS_CLA=()
+          EXEMPT_USERS=()
           for user in $USERS; do
             if [[ -z "$user" ]]; then
               NEEDS_CLA+=("<unknown>")
@@ -140,6 +142,7 @@ jobs:
 
             if is_allowed_bot "$user"; then
               echo "Skipping bot/allowlisted account: $user"
+              EXEMPT_USERS+=("$user (bot)")
               continue
             fi
 
@@ -150,12 +153,22 @@ jobs:
 
             if [ "$response" == "204" ]; then
               echo "User $user is a Knitli org member"
+              EXEMPT_USERS+=("$user (org member)")
               continue
             else
               echo "User $user is NOT a Knitli org member and may require CLA"
               NEEDS_CLA+=("$user")
             fi
           done
+
+          # Output exempt users as JSON array for later use
+          # Handle empty array case by checking length first
+          if [ ${#EXEMPT_USERS[@]} -eq 0 ]; then
+            EXEMPT_JSON='[]'
+          else
+            EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
+          fi
+          echo "exempt_users=$EXEMPT_JSON" >> "$GITHUB_OUTPUT"
 
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
             echo "All committers are org members or allowed bots; CLA not required"
@@ -167,6 +180,97 @@ jobs:
             echo "should_run_cla=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # Post success comment when all committers are exempt (org members or bots)
+  post-exempt-status:
+    needs: check-cla
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post CLA Exempt Comment
+        uses: actions/github-script@v7
+        env:
+          EXEMPT_USERS: ${{ needs.check-cla.outputs.exempt_users }}
+          REPO_NAME: ${{ inputs.repo_name }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const exemptUsers = JSON.parse(process.env.EXEMPT_USERS || '[]');
+            const repoName = process.env.REPO_NAME;
+            
+            // Determine PR number
+            const prNumber = context.payload.pull_request?.number || context.payload.issue?.number;
+            
+            if (!prNumber) {
+              console.log('No PR number found, skipping comment');
+              return;
+            }
+            
+            // Format the exempt users list
+            const userList = exemptUsers.map(u => `- ✅ ${u}`).join('\n');
+            
+            const body = [
+              '## ✅ CLA Check Passed',
+              '',
+              'All contributors to this PR are exempt from the CLA requirement:',
+              '',
+              userList,
+              '',
+              '**Knitli organization members and recognized bots do not need to sign the CLA.**',
+              '',
+              `Thanks for your contribution to ${repoName}! 🧵`
+            ].join('\n');
+            
+            // Check if we already posted a comment to avoid duplicates
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            
+            const existingComment = comments.data.find(c => 
+              c.user.login === 'github-actions[bot]' && 
+              c.body.includes('## ✅ CLA Check Passed')
+            );
+            
+            if (existingComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body
+              });
+              console.log('Updated existing CLA exempt comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: body
+              });
+              console.log('Posted CLA exempt comment');
+            }
+            
+            // Remove any existing CLA Assistant comments to avoid confusion
+            const claAssistantIdentifiers = [
+              'Please sign the Contributor License Agreement (CLA)',
+              'Contributor License Agreement required',
+              'CLA Assistant'
+            ];
+            for (const comment of comments.data) {
+              if (
+                comment.user.login === 'github-actions[bot]' &&
+                claAssistantIdentifiers.some(id => comment.body.includes(id))
+              ) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+                console.log('Deleted outdated CLA Assistant comment (id: ' + comment.id + ')');
+              }
+            }
   cla-assistant:
     needs: check-cla
     if: needs.check-cla.outputs.should_run_cla == 'true'
@@ -202,8 +306,24 @@ jobs:
           branch: ${{ inputs.branch }}
 
           # Bot allowlist (users who don't need to sign)
+          # This is a fallback safety net - the check-membership step filters bots/org members first.
+          # Using glob patterns (*) supported by the CLA Assistant action.
+          # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
+          # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
+          # so there may be minor differences. The check-membership step is the primary filter.
           allowlist: |
-            Claude,Copilot,Codegen-sh,Dependabot,Github-Actions,codegen-sh[bot],dependabot[bot],github-actions[bot],actions-user,changeset-bot,claude[bot],copilot
+            bot*
+            *bot
+            *[bot]
+            claude*
+            copilot*
+            dependabot*
+            github-actions*
+            codegen-sh*
+            changeset-bot*
+            actions-user
+            sourcery*
+            github-code-quality*
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
