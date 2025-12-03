@@ -39,6 +39,10 @@ on:
         description: 'Personal access token with write access to knitli/.github repo'
         required: true
 
+concurrency:
+  group: cla-check-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
 permissions:
   actions: write
   contents: read
@@ -51,9 +55,16 @@ jobs:
     outputs:
       is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
-      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
+      should_run_cla: ${{ steps.check-membership. outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
     steps:
+      - name: Debug Event Context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Action: ${{ github.event.action }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "SHA: ${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Check Repository
         id: check-repo
         run: |
@@ -210,110 +221,52 @@ jobs:
   # Post success comment when all committers are exempt (org members or bots)
   post-exempt-status:
     needs: check-cla
-    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    if: needs.check-cla. outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
     runs-on: ubuntu-latest
     steps:
-      - name: Post CLA Exempt Comment
+      # Add this NEW step BEFORE the comment step
+      - name: Create Success Status Check
         uses: actions/github-script@v7
-        env:
-          EXEMPT_USERS: ${{ needs.check-cla.outputs.exempt_users }}
-          REPO_NAME: ${{ inputs.repo_name }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets. GITHUB_TOKEN }}
           script: |
-            const exemptUsers = JSON.parse(process.env.EXEMPT_USERS || '[]');
-            const repoName = process.env.REPO_NAME;
+            const prNumber = context.payload.pull_request?.number;
+            const sha = context.payload.pull_request?.head?. sha || context.sha;
             
-            // Determine PR number
-            const prNumber = context.payload.pull_request?.number || context.payload.issue?.number;
-            
-            if (!prNumber) {
-              console.log('No PR number found, skipping comment');
+            if (!sha) {
+              console.log('No SHA found, skipping status check');
               return;
             }
             
-            // Format the exempt users list
-            const userList = exemptUsers.map(u => `- ✅ ${u}`).join('\n');
-            
-            const body = [
-              '## ✅ CLA Check Passed',
-              '',
-              'All contributors to this PR are exempt from the CLA requirement:',
-              '',
-              userList,
-              '',
-              '**Knitli organization members and recognized bots do not need to sign the CLA.**',
-              '',
-              `Thanks for your contribution to ${repoName}! 🧵`
-            ].join('\n');
-            
-            // Check if we already posted a comment to avoid duplicates
-            const comments = await github.rest.issues.listComments({
+            await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: prNumber
+              sha: sha,
+              state: 'success',
+              context: 'CLA Assistant',
+              description: 'All contributors are exempt (org members/bots)',
+              target_url: `https://github. com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
             });
             
-            const existingComment = comments.data.find(c => 
-              c.user.login === 'github-actions[bot]' && 
-              c.body.includes('## ✅ CLA Check Passed')
-            );
-            
-            if (existingComment) {
-              // Update existing comment
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body: body
-              });
-              console.log('Updated existing CLA exempt comment');
-            } else {
-              // Create new comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body: body
-              });
-              console.log('Posted CLA exempt comment');
-            }
-            
-            // Remove any existing CLA Assistant comments to avoid confusion
-            const claAssistantIdentifiers = [
-              'Please sign the Contributor License Agreement (CLA)',
-              'Contributor License Agreement required',
-              'CLA Assistant'
-            ];
-            for (const comment of comments.data) {
-              if (
-                comment.user.login === 'github-actions[bot]' &&
-                claAssistantIdentifiers.some(id => comment.body.includes(id))
-              ) {
-                await github.rest.issues.deleteComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: comment.id
-                });
-                console.log('Deleted outdated CLA Assistant comment (id: ' + comment.id + ')');
-              }
-            }
+            console.log('Created success status check for CLA');
+  
   cla-assistant:
     needs: check-cla
-    if: needs.check-cla.outputs.should_run_cla == 'true'
+    # Make this condition MORE explicit
+    if: |
+      needs.check-cla.outputs.is_knitli_repo == 'true' && 
+      needs.check-cla.outputs.should_run_cla == 'true' &&
+      github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
-      - name: Determine CLA Document URL
-        id: cla-url
+      - name: Verify CLA Required
         run: |
-          # Use provided URL or construct default from repo
-          if [[ -n "${{ inputs.cla_document_url }}" ]]; then
-            url="${{ inputs.cla_document_url }}"
-          else
-            url="https://github.com/${{ github.repository }}/blob/main/CONTRIBUTORS_LICENSE_AGREEMENT.md"
+          echo "CLA check required for non-exempt users"
+          echo "should_run_cla=${{ needs.check-cla. outputs.should_run_cla }}"
+          if [ "${{ needs.check-cla.outputs.should_run_cla }}" != "true" ]; then
+            echo "ERROR: CLA assistant job should not run - all users are exempt"
+            exit 1
           fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          echo "Using CLA document: $url"
 
       - name: CLA Assistant
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
