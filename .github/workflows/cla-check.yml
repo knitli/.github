@@ -57,6 +57,7 @@ jobs:
       is_member: ${{ steps.check-membership.outputs.is_member }}
       should_run_cla: ${{ steps.check-membership. outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
+      exempt_usernames: ${{ steps.check-membership.outputs.exempt_usernames }}
     steps:
       - name: Debug Event Context
         run: |
@@ -147,6 +148,7 @@ jobs:
           # Check each user for org membership or allowlist
           NEEDS_CLA=()
           EXEMPT_USERS=()
+          EXEMPT_USERNAMES=()
           for user in $USERS; do
             if [[ -z "$user" ]]; then
               NEEDS_CLA+=("<unknown>")
@@ -156,6 +158,7 @@ jobs:
             if is_allowed_bot "$user"; then
               echo "Skipping bot/allowlisted account: $user"
               EXEMPT_USERS+=("$user (bot)")
+              EXEMPT_USERNAMES+=("$user")
               continue
             fi
 
@@ -168,6 +171,7 @@ jobs:
             if [ "$collab_response" == "204" ]; then
               echo "User $user is a repository collaborator"
               EXEMPT_USERS+=("$user (collaborator)")
+              EXEMPT_USERNAMES+=("$user")
               continue
             fi
 
@@ -181,6 +185,7 @@ jobs:
               if [ "$org_response" == "204" ]; then
                 echo "User $user is a Knitli org member"
                 EXEMPT_USERS+=("$user (org member)")
+                EXEMPT_USERNAMES+=("$user")
                 continue
               elif [ "$org_response" == "404" ] || [ "$org_response" == "302" ]; then
                 # 404 = not a member, 302 = requester is not an org member (can't see membership)
@@ -207,6 +212,14 @@ jobs:
             EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
           fi
           echo "exempt_users=$EXEMPT_JSON" >> "$GITHUB_OUTPUT"
+
+          # Output exempt usernames as comma-separated string for allowlist
+          if [ ${#EXEMPT_USERNAMES[@]} -eq 0 ]; then
+            EXEMPT_USERNAMES_CSV=""
+          else
+            EXEMPT_USERNAMES_CSV=$(IFS=','; echo "${EXEMPT_USERNAMES[*]}")
+          fi
+          echo "exempt_usernames=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
 
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
             echo "All committers are org members or allowed bots; CLA not required"
@@ -291,19 +304,20 @@ jobs:
           # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
           # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
           # so there may be minor differences. The check-membership step is the primary filter.
-          allowlist: |
-            bot*
-            *bot
-            *[bot]
-            claude*
-            copilot*
-            dependabot*
-            github-actions*
-            codegen-sh*
-            changeset-bot*
-            actions-user
-            sourcery*
-            github-code-quality*
+          # Dynamic exempt users from check-cla job are appended at the end.
+          allowlist: >-
+            bot*,
+            *bot,
+            *[bot],
+            claude*,
+            copilot*,
+            dependabot*,
+            github-actions*,
+            codegen-sh*,
+            changeset-bot*,
+            actions-user,
+            sourcery*,
+            github-code-quality*${{ needs.check-cla.outputs.exempt_usernames && format(',{0}', needs.check-cla.outputs.exempt_usernames) || '' }}
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
