@@ -306,7 +306,7 @@ jobs:
           # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
           # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
           # so there may be minor differences. The check-membership step is the primary filter.
-          allowlist: ${{ needs.check-cla.outputs.exempt_users_csv }}bot*,*bot,*[bot],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*
+          allowlist: ${{ needs.check-cla.outputs.exempt_users_csv }}bot*,*bot,*[[]bot[]],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
