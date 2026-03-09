@@ -237,24 +237,43 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = context.payload.pull_request?.number;
-            const sha = context.payload.pull_request?.head?.sha || context.sha;
-            
+            // For pull_request/pull_request_target events, use payload directly.
+            // For issue_comment events, context.payload.pull_request and context.sha
+            // are not set, so we derive the PR number from the issue and fetch the head SHA.
+            let prNumber = context.payload.pull_request?.number;
+            let sha = context.payload.pull_request?.head?.sha;
+
+            if (!prNumber && context.payload.issue?.number) {
+              prNumber = context.payload.issue.number;
+            }
+
+            if (!sha && prNumber) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              sha = pr.head.sha;
+            }
+
             if (!sha) {
               console.log('No SHA found, skipping status check');
               return;
             }
-            
-            await github.rest.repos.createCommitStatus({
+
+            const statusPayload = {
               owner: context.repo.owner,
               repo: context.repo.repo,
               sha: sha,
               state: 'success',
               context: 'CLA Assistant',
               description: 'All contributors are exempt (org members/bots)',
-              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
-            });
-            
+            };
+            if (prNumber) {
+              statusPayload.target_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber}`;
+            }
+            await github.rest.repos.createCommitStatus(statusPayload);
+
             console.log('Created success status check for CLA');
   
   cla-assistant:
