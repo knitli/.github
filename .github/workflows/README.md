@@ -82,6 +82,22 @@ When creating new reusable workflows:
 - ✅ **Maintainability**: Easier to fix bugs and add features
 - ✅ **DRY principle**: Don't repeat workflow code across repos
 
+## Troubleshooting
+
+### Authentication Errors & "Failed Membership Checks"
+
+If organization members are routinely being told they need to sign the CLA, there is an authentication issue with the `CLA_ACCESS_TOKEN` preventing the action from accurately retrieving organization membership.
+
+**Root Causes**:
+1. The `CLA_ACCESS_TOKEN` (a Personal Access Token) lacks the `read:org` scope required to check organization membership.
+2. The Knitli organization enforces SAML Single Sign-On (SSO), and the `CLA_ACCESS_TOKEN` has not been explicitly authorized for SSO. Without SSO authorization, the GitHub API returns `302`/`403`/`404` errors for organization membership checks, even if the token owner is an admin.
+
+**How to Fix**:
+1. Go to your GitHub Settings -> Developer settings -> Personal access tokens (classic).
+2. Generate a new token with the `read:org` and `repo` scopes (or update the existing one).
+3. **Crucial Step**: Next to your token, click "Configure SSO" and authorize it for the Knitli organization.
+4. Update the `CLA_ACCESS_TOKEN` organization secret with this new, authorized token value.
+
 ## See Also
 
 - [GitHub Docs: Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)

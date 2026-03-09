@@ -55,8 +55,9 @@ jobs:
     outputs:
       is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
-      should_run_cla: ${{ steps.check-membership. outputs.should_run_cla }}
+      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
+      exempt_users_csv: ${{ steps.check-membership.outputs.exempt_users_csv }}
     steps:
       - name: Debug Event Context
         run: |
@@ -155,7 +156,7 @@ jobs:
 
             if is_allowed_bot "$user"; then
               echo "Skipping bot/allowlisted account: $user"
-              EXEMPT_USERS+=("$user (bot)")
+              EXEMPT_USERS+=("$user")
               continue
             fi
 
@@ -167,7 +168,7 @@ jobs:
 
             if [ "$collab_response" == "204" ]; then
               echo "User $user is a repository collaborator"
-              EXEMPT_USERS+=("$user (collaborator)")
+              EXEMPT_USERS+=("$user")
               continue
             fi
 
@@ -180,7 +181,7 @@ jobs:
 
               if [ "$org_response" == "204" ]; then
                 echo "User $user is a Knitli org member"
-                EXEMPT_USERS+=("$user (org member)")
+                EXEMPT_USERS+=("$user")
                 continue
               elif [ "$org_response" == "404" ] || [ "$org_response" == "302" ]; then
                 # 404 = not a member, 302 = requester is not an org member (can't see membership)
@@ -199,14 +200,20 @@ jobs:
             fi
           done
 
-          # Output exempt users as JSON array for later use
-          # Handle empty array case by checking length first
+          # Output exempt users as JSON array and CSV for later use
           if [ ${#EXEMPT_USERS[@]} -eq 0 ]; then
             EXEMPT_JSON='[]'
+            EXEMPT_CSV=''
           else
             EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
+            EXEMPT_CSV="$(IFS=, ; echo "${EXEMPT_USERS[*]}")"
+          fi
+          # If we have exempt users, append a comma so we can cleanly concatenate in the allowlist
+          if [ -n "$EXEMPT_CSV" ]; then
+            EXEMPT_CSV="${EXEMPT_CSV},"
           fi
           echo "exempt_users=$EXEMPT_JSON" >> "$GITHUB_OUTPUT"
+          echo "exempt_users_csv=$EXEMPT_CSV" >> "$GITHUB_OUTPUT"
 
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
             echo "All committers are org members or allowed bots; CLA not required"
@@ -221,17 +228,17 @@ jobs:
   # Post success comment when all committers are exempt (org members or bots)
   post-exempt-status:
     needs: check-cla
-    if: needs.check-cla. outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
     runs-on: ubuntu-latest
     steps:
       # Add this NEW step BEFORE the comment step
       - name: Create Success Status Check
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets. GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const prNumber = context.payload.pull_request?.number;
-            const sha = context.payload.pull_request?.head?. sha || context.sha;
+            const sha = context.payload.pull_request?.head?.sha || context.sha;
             
             if (!sha) {
               console.log('No SHA found, skipping status check');
@@ -245,7 +252,7 @@ jobs:
               state: 'success',
               context: 'CLA Assistant',
               description: 'All contributors are exempt (org members/bots)',
-              target_url: `https://github. com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
             });
             
             console.log('Created success status check for CLA');
@@ -255,14 +262,22 @@ jobs:
     # Make this condition MORE explicit
     if: |
       needs.check-cla.outputs.is_knitli_repo == 'true' && 
-      needs.check-cla.outputs.should_run_cla == 'true' &&
-      github.event_name != 'issue_comment'
+      needs.check-cla.outputs.should_run_cla == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Determine CLA URL
+        id: cla-url
+        run: |
+          if [ -n "${{ inputs.cla_document_url }}" ]; then
+            echo "url=${{ inputs.cla_document_url }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://github.com/${{ github.repository }}/blob/main/CONTRIBUTORS_LICENSE_AGREEMENT.md" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify CLA Required
         run: |
           echo "CLA check required for non-exempt users"
-          echo "should_run_cla=${{ needs.check-cla. outputs.should_run_cla }}"
+          echo "should_run_cla=${{ needs.check-cla.outputs.should_run_cla }}"
           if [ "${{ needs.check-cla.outputs.should_run_cla }}" != "true" ]; then
             echo "ERROR: CLA assistant job should not run - all users are exempt"
             exit 1
@@ -291,19 +306,7 @@ jobs:
           # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
           # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
           # so there may be minor differences. The check-membership step is the primary filter.
-          allowlist: |
-            bot*
-            *bot
-            *[bot]
-            claude*
-            copilot*
-            dependabot*
-            github-actions*
-            codegen-sh*
-            changeset-bot*
-            actions-user
-            sourcery*
-            github-code-quality*
+          allowlist: ${{ needs.check-cla.outputs.exempt_users_csv }}bot*,*bot,*[bot],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
