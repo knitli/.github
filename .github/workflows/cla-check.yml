@@ -55,7 +55,7 @@ jobs:
     outputs:
       is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
-      should_run_cla: ${{ steps.check-membership. outputs.should_run_cla }}
+      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
       exempt_usernames: ${{ steps.check-membership.outputs.exempt_usernames }}
     steps:
@@ -234,17 +234,17 @@ jobs:
   # Post success comment when all committers are exempt (org members or bots)
   post-exempt-status:
     needs: check-cla
-    if: needs.check-cla. outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
     runs-on: ubuntu-latest
     steps:
       # Add this NEW step BEFORE the comment step
       - name: Create Success Status Check
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets. GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const prNumber = context.payload.pull_request?.number;
-            const sha = context.payload.pull_request?.head?. sha || context.sha;
+            const sha = context.payload.pull_request?.head?.sha || context.sha;
             
             if (!sha) {
               console.log('No SHA found, skipping status check');
@@ -258,7 +258,7 @@ jobs:
               state: 'success',
               context: 'CLA Assistant',
               description: 'All contributors are exempt (org members/bots)',
-              target_url: `https://github. com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
             });
             
             console.log('Created success status check for CLA');
@@ -266,16 +266,13 @@ jobs:
   cla-assistant:
     needs: check-cla
     # Make this condition MORE explicit
-    if: |
-      needs.check-cla.outputs.is_knitli_repo == 'true' && 
-      needs.check-cla.outputs.should_run_cla == 'true' &&
-      github.event_name != 'issue_comment'
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'true' && github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Verify CLA Required
         run: |
           echo "CLA check required for non-exempt users"
-          echo "should_run_cla=${{ needs.check-cla. outputs.should_run_cla }}"
+          echo "should_run_cla=${{ needs.check-cla.outputs.should_run_cla }}"
           if [ "${{ needs.check-cla.outputs.should_run_cla }}" != "true" ]; then
             echo "ERROR: CLA assistant job should not run - all users are exempt"
             exit 1
@@ -293,7 +290,7 @@ jobs:
           path-to-signatures: cla-signatures/${{ inputs.repo_name }}.json
 
           # CLA document location
-          path-to-document: ${{ steps.cla-url.outputs.url }}
+          path-to-document: ${{ inputs.cla_document_url }}
 
           # Branch for signatures
           branch: ${{ inputs.branch }}
@@ -305,19 +302,7 @@ jobs:
           # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
           # so there may be minor differences. The check-membership step is the primary filter.
           # Dynamic exempt users from check-cla job are appended at the end.
-          allowlist: >-
-            bot*,
-            *bot,
-            *[bot],
-            claude*,
-            copilot*,
-            dependabot*,
-            github-actions*,
-            codegen-sh*,
-            changeset-bot*,
-            actions-user,
-            sourcery*,
-            github-code-quality*${{ needs.check-cla.outputs.exempt_usernames && format(',{0}', needs.check-cla.outputs.exempt_usernames) || '' }}
+          allowlist: bot*,*bot,*[bot],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*${{ needs.check-cla.outputs.exempt_usernames && format(',{0}', needs.check-cla.outputs.exempt_usernames) || '' }}
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
@@ -339,7 +324,7 @@ jobs:
 
             Those exact words are important[^1], so please don't change them. 😉
 
-            You can read the full CLA here: [Contributor License Agreement](${{ steps.cla-url.outputs.url }})
+            You can read the full CLA here: [Contributor License Agreement](${{ inputs.cla_document_url }})
 
             [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.
 
