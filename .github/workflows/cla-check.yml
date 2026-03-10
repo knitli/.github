@@ -12,7 +12,7 @@
 #   uses: knitli/.github/.github/workflows/cla-check.yml@main
 #   with:
 #     repo_name: "codeweaver"  # or "thread", etc.
-#     cla_document_url: "https://github.com/knitli/codeweaver/blob/main/CLA.md"  # optional
+#     cla_document_url: "https://github.com/knitli/codeweaver/blob/main/CLA.md"  # required
 #   secrets: inherit
 
 name: CLA Check
@@ -26,9 +26,8 @@ on:
         type: string
       cla_document_url:
         description: 'URL to the CLA document'
-        required: false
+        required: true
         type: string
-        default: ''
       branch:
         description: 'Branch for storing signatures in .github repo'
         required: false
