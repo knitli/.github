@@ -55,9 +55,9 @@ jobs:
     outputs:
       is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
       is_member: ${{ steps.check-membership.outputs.is_member }}
-      should_run_cla: ${{ steps.check-membership. outputs.should_run_cla }}
+      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
-      exempt_usernames: ${{ steps.check-membership.outputs.exempt_usernames }}
+      exempt_users_csv: ${{ steps.check-membership.outputs.exempt_users_csv }}
     steps:
       - name: Debug Event Context
         run: |
@@ -217,9 +217,9 @@ jobs:
           if [ ${#EXEMPT_USERNAMES[@]} -eq 0 ]; then
             EXEMPT_USERNAMES_CSV=""
           else
-            EXEMPT_USERNAMES_CSV=$(IFS=','; echo "${EXEMPT_USERNAMES[*]}")
+            EXEMPT_USERNAMES_CSV="$(IFS=','; echo "${EXEMPT_USERNAMES[*]}")"
           fi
-          echo "exempt_usernames=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
+          echo "exempt_users_csv=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
 
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
             echo "All committers are org members or allowed bots; CLA not required"
@@ -234,23 +234,43 @@ jobs:
   # Post success comment when all committers are exempt (org members or bots)
   post-exempt-status:
     needs: check-cla
-    if: needs.check-cla. outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
     runs-on: ubuntu-latest
     steps:
       # Add this NEW step BEFORE the comment step
       - name: Create Success Status Check
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets. GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = context.payload.pull_request?.number;
-            const sha = context.payload.pull_request?.head?. sha || context.sha;
-            
+            let prNumber, sha;
+
+            if (context.eventName === 'issue_comment') {
+              // For issue_comment events, context.payload.pull_request is not set.
+              // Verify the comment is on a PR by checking if issue.pull_request exists
+              // (GitHub sets this field when the issue is actually a pull request).
+              if (!context.payload.issue?.pull_request) {
+                console.log('issue_comment is on a regular issue (not a PR), skipping status check');
+                return;
+              }
+              prNumber = context.payload.issue.number;
+              // Fetch the PR to get the current head SHA
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              sha = pr.head.sha;
+            } else {
+              prNumber = context.payload.pull_request?.number;
+              sha = context.payload.pull_request?.head?.sha || context.sha;
+            }
+
             if (!sha) {
               console.log('No SHA found, skipping status check');
               return;
             }
-            
+
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -258,24 +278,33 @@ jobs:
               state: 'success',
               context: 'CLA Assistant',
               description: 'All contributors are exempt (org members/bots)',
-              target_url: `https://github. com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
             });
-            
+
             console.log('Created success status check for CLA');
   
   cla-assistant:
     needs: check-cla
-    # Make this condition MORE explicit
+    # Make this condition MORE explicit and guard against non-PR issue_comment events
     if: |
       needs.check-cla.outputs.is_knitli_repo == 'true' && 
       needs.check-cla.outputs.should_run_cla == 'true' &&
-      github.event_name != 'issue_comment'
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request.url != '')
     runs-on: ubuntu-latest
     steps:
+      - name: Determine CLA URL
+        id: cla-url
+        run: |
+          if [ -n "${{ inputs.cla_document_url }}" ]; then
+            echo "url=${{ inputs.cla_document_url }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://github.com/${{ github.repository }}/blob/main/CONTRIBUTORS_LICENSE_AGREEMENT.md" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify CLA Required
         run: |
           echo "CLA check required for non-exempt users"
-          echo "should_run_cla=${{ needs.check-cla. outputs.should_run_cla }}"
+          echo "should_run_cla=${{ needs.check-cla.outputs.should_run_cla }}"
           if [ "${{ needs.check-cla.outputs.should_run_cla }}" != "true" ]; then
             echo "ERROR: CLA assistant job should not run - all users are exempt"
             exit 1
@@ -317,7 +346,7 @@ jobs:
             changeset-bot*,
             actions-user,
             sourcery*,
-            github-code-quality*${{ needs.check-cla.outputs.exempt_usernames && format(',{0}', needs.check-cla.outputs.exempt_usernames) || '' }}
+            github-code-quality*${{ needs.check-cla.outputs.exempt_users_csv && format(',{0}', needs.check-cla.outputs.exempt_users_csv) || '' }}
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
