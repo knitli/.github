@@ -286,10 +286,7 @@ jobs:
   cla-assistant:
     needs: check-cla
     # Make this condition MORE explicit and guard against non-PR issue_comment events
-    if: |
-      needs.check-cla.outputs.is_knitli_repo == 'true' && 
-      needs.check-cla.outputs.should_run_cla == 'true' &&
-      (github.event_name != 'issue_comment' || github.event.issue.pull_request.url != '')
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'true' && (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     steps:
       - name: Determine CLA URL
@@ -334,19 +331,7 @@ jobs:
           # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
           # so there may be minor differences. The check-membership step is the primary filter.
           # Dynamic exempt users from check-cla job are appended at the end.
-          allowlist: >-
-            bot*,
-            *bot,
-            *[bot],
-            claude*,
-            copilot*,
-            dependabot*,
-            github-actions*,
-            codegen-sh*,
-            changeset-bot*,
-            actions-user,
-            sourcery*,
-            github-code-quality*${{ needs.check-cla.outputs.exempt_users_csv && format(',{0}', needs.check-cla.outputs.exempt_users_csv) || '' }}
+          allowlist: bot*,*bot,*[bot],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*${{ needs.check-cla.outputs.exempt_users_csv && format(',{0}', needs.check-cla.outputs.exempt_users_csv) || '' }}
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
