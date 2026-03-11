@@ -286,7 +286,7 @@ jobs:
   cla-assistant:
     needs: check-cla
     # Make this condition MORE explicit and guard against non-PR issue_comment events
-    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'true' && (github.event_name != 'issue_comment' || github.event.issue.pull_request.url != '')
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'true' && (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     steps:
       - name: Determine CLA URL
@@ -319,7 +319,7 @@ jobs:
           path-to-signatures: cla-signatures/${{ inputs.repo_name }}.json
 
           # CLA document location
-          path-to-document: ${{ inputs.cla_document_url }}
+          path-to-document: ${{ steps.cla-url.outputs.url }}
 
           # Branch for signatures
           branch: ${{ inputs.branch }}
@@ -353,7 +353,7 @@ jobs:
 
             Those exact words are important[^1], so please don't change them. 😉
 
-            You can read the full CLA here: [Contributor License Agreement](${{ inputs.cla_document_url }})
+            You can read the full CLA here: [Contributor License Agreement](${{ steps.cla-url.outputs.url }})
 
             [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.
 
