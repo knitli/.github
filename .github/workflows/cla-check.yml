@@ -46,6 +46,7 @@ concurrency:
 permissions:
   actions: write
   contents: read
+  issues: write
   pull-requests: write
   statuses: write
 
@@ -222,11 +223,19 @@ jobs:
           fi
           echo "exempt_users_csv=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
 
-          # Output users who need CLA as comma-separated string
-          if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
+          # Output users who need CLA as comma-separated string, excluding
+          # non-mentionable placeholders such as "<unknown>"
+          NEEDS_CLA_MENTIONABLE=()
+          for user in "${NEEDS_CLA[@]}"; do
+            if [ "$user" != "<unknown>" ]; then
+              NEEDS_CLA_MENTIONABLE+=("$user")
+            fi
+          done
+
+          if [ ${#NEEDS_CLA_MENTIONABLE[@]} -eq 0 ]; then
             NEEDS_CLA_CSV=""
           else
-            NEEDS_CLA_CSV="$(IFS=','; echo "${NEEDS_CLA[*]}")"
+            NEEDS_CLA_CSV="$(IFS=','; echo "${NEEDS_CLA_MENTIONABLE[*]}")"
           fi
           echo "needs_cla_csv=$NEEDS_CLA_CSV" >> "$GITHUB_OUTPUT"
 
