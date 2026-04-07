@@ -58,6 +58,7 @@ jobs:
       should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
       exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
       exempt_users_csv: ${{ steps.check-membership.outputs.exempt_users_csv }}
+      needs_cla_csv: ${{ steps.check-membership.outputs.needs_cla_csv }}
     steps:
       - name: Debug Event Context
         run: |
@@ -221,6 +222,14 @@ jobs:
           fi
           echo "exempt_users_csv=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
 
+          # Output users who need CLA as comma-separated string
+          if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
+            NEEDS_CLA_CSV=""
+          else
+            NEEDS_CLA_CSV="$(IFS=','; echo "${NEEDS_CLA[*]}")"
+          fi
+          echo "needs_cla_csv=$NEEDS_CLA_CSV" >> "$GITHUB_OUTPUT"
+
           if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
             echo "All committers are org members or allowed bots; CLA not required"
             echo "is_member=true" >> "$GITHUB_OUTPUT"
@@ -307,6 +316,89 @@ jobs:
             exit 1
           fi
 
+      - name: Post Multi-Author CLA Comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Only run for pull_request_target events or issue_comment events on PRs
+            if (context.eventName === 'issue_comment' && !context.payload.issue?.pull_request) {
+              console.log('issue_comment is on a regular issue (not a PR), skipping');
+              return;
+            }
+            if (context.eventName !== 'pull_request_target' && context.eventName !== 'issue_comment') {
+              console.log(`Event ${context.eventName} not applicable for CLA comment, skipping`);
+              return;
+            }
+
+            const needsCsvRaw = '${{ needs.check-cla.outputs.needs_cla_csv }}';
+            if (!needsCsvRaw) {
+              console.log('No users need CLA, skipping comment');
+              return;
+            }
+
+            const users = needsCsvRaw.split(',').map(u => u.trim()).filter(Boolean);
+            if (users.length === 0) {
+              console.log('No users need CLA, skipping comment');
+              return;
+            }
+
+            const prNumber = context.payload.pull_request?.number || context.payload.issue?.number;
+            if (!prNumber) {
+              console.log('No PR number found, skipping comment');
+              return;
+            }
+
+            const repoName = '${{ inputs.repo_name }}';
+            const claUrl = '${{ steps.cla-url.outputs.url }}';
+            const mentions = users.map(u => `@${u}`).join(', ');
+            const MARKER = '<!-- cla-multi-author-check -->';
+
+            const body = `${MARKER}
+            👋 Hey ${mentions},
+
+            ## Thanks for your contribution to \`${repoName}\`! 🧵
+
+            ### You need to agree to the CLA first... 🖊️
+
+            Before we can accept your contribution, **you (each of you) need to agree to our Contributor License Agreement (CLA)**.
+
+            ### To agree to the CLA, please comment:
+            > I read the contributors license agreement and I agree to it.
+
+            Those exact words are important[^1] — our bot needs them to recognize your agreement.
+
+            You can read the full CLA here: [Contributor License Agreement](${claUrl})
+
+            [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.`;
+
+            // Search for existing comment with marker
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existingComment = comments.find(c => c.body.includes(MARKER));
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body,
+              });
+              console.log(`Updated existing CLA comment (id=${existingComment.id})`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+              console.log('Posted new CLA comment');
+            }
+
       - name: CLA Assistant
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
         env:
@@ -335,11 +427,11 @@ jobs:
 
           # Commit messages
           create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
-          signed-commit-message: '${{ github.event.pull_request.user.login || github.event.issue.user.login }} signed the CLA for ${{ inputs.repo_name }} PR #${{ github.event.pull_request.number || github.event.issue.number }}'
+          signed-commit-message: '${{ github.actor }} signed the CLA for ${{ inputs.repo_name }} PR #${{ github.event.pull_request.number || github.event.issue.number }}'
 
           # Custom PR comments
           custom-notsigned-prcomment: |
-            👋 Hey @${{ github.event.pull_request.user.login || github.event.issue.user.login }},
+            👋 Hey @${{ needs.check-cla.outputs.needs_cla_csv }},
 
             ## Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
 
@@ -358,7 +450,7 @@ jobs:
             [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.
 
           custom-pr-sign-comment: |
-            ✅ @${{ github.event.pull_request.user.login || github.event.issue.user.login }} has signed the CLA.
+            ✅ @${{ github.actor }} has signed the CLA.
 
           custom-allsigned-prcomment: |
             ## 🚀 All contributors have signed the CLA! 👍
