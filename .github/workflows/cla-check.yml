@@ -354,24 +354,25 @@ jobs:
             const mentions = users.map(u => `@${u}`).join(', ');
             const MARKER = '<!-- cla-multi-author-check -->';
 
-            const body = `${MARKER}
-            👋 Hey ${mentions},
-
-            ## Thanks for your contribution to \`${repoName}\`! 🧵
-
-            ### You need to agree to the CLA first... 🖊️
-
-            Before we can accept your contribution, **you (each of you) need to agree to our Contributor License Agreement (CLA)**.
-
-            ### To agree to the CLA, please comment:
-            > I read the contributors license agreement and I agree to it.
-
-            Those exact words are important[^1] — our bot needs them to recognize your agreement.
-
-            You can read the full CLA here: [Contributor License Agreement](${claUrl})
-
-            [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.`;
-
+            const body = [
+              MARKER,
+              `👋 Hey ${mentions},`,
+              '',
+              `## Thanks for your contribution to \`${repoName}\`! 🧵`,
+              '',
+              '### You need to agree to the CLA first... 🖊️',
+              '',
+              'Before we can accept your contribution, **you (each of you) need to agree to our Contributor License Agreement (CLA)**.',
+              '',
+              '### To agree to the CLA, please comment:',
+              '> I read the contributors license agreement and I agree to it.',
+              '',
+              'Those exact words are important[^1] — our bot needs them to recognize your agreement.',
+              '',
+              `You can read the full CLA here: [Contributor License Agreement](${claUrl})`,
+              '',
+              '[^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.',
+            ].join('\n');
             // Search for existing comment with marker
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -431,7 +432,7 @@ jobs:
 
           # Custom PR comments
           custom-notsigned-prcomment: |
-            👋 Hey @${{ needs.check-cla.outputs.needs_cla_csv }},
+            👋 Hey @${{ replace(needs.check-cla.outputs.needs_cla_csv, ',', ', @') }},
 
             ## Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
 
