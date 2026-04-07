@@ -394,13 +394,17 @@ jobs:
             const existingComment = comments.find(c => c.body.includes(MARKER));
 
             if (existingComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existingComment.id,
-                body,
-              });
-              console.log(`Updated existing CLA comment (id=${existingComment.id})`);
+              if (existingComment.body === body) {
+                console.log(`Existing CLA comment already up to date (id=${existingComment.id}), skipping update`);
+              } else {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body,
+                });
+                console.log(`Updated existing CLA comment (id=${existingComment.id})`);
+              }
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
