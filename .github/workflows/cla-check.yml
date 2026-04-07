@@ -307,6 +307,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
     steps:
       - name: Determine CLA URL
         id: cla-url
