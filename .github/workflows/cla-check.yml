@@ -360,9 +360,9 @@ jobs:
               '',
               `## Thanks for your contribution to \`${repoName}\`! 🧵`,
               '',
-              '### You need to agree to the CLA first... 🖊️',
+              '### Sign the CLA to get started 🖊️',
               '',
-              'Before we can accept your contribution, **you (each of you) need to agree to our Contributor License Agreement (CLA)**.',
+              'Each of you needs to agree to our Contributor License Agreement (CLA) before we can accept this contribution. If you already signed, you\'re all set — no further action needed.',
               '',
               '### To agree to the CLA, please comment:',
               '> I read the contributors license agreement and I agree to it.',
@@ -373,11 +373,13 @@ jobs:
               '',
               '[^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.',
             ].join('\n');
-            // Search for existing comment with marker
-            const { data: comments } = await github.rest.issues.listComments({
+
+            // Search for existing comment with marker (paginate in case of many comments)
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
+              per_page: 100,
             });
 
             const existingComment = comments.find(c => c.body.includes(MARKER));
