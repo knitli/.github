@@ -330,13 +330,23 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Only run for pull_request_target events or issue_comment events on PRs
-            if (context.eventName === 'issue_comment' && !context.payload.issue?.pull_request) {
+            // Only run for pull_request_target opened/synchronize events or issue_comment events on PRs.
+            // On issue_comment we only *create* the comment when missing — never update — so we don't
+            // re-ping contributors who already signed and triggered the re-run via a comment.
+            const isIssueComment = context.eventName === 'issue_comment';
+            const isPrTarget = context.eventName === 'pull_request_target';
+            const prTargetAction = context.payload.action;
+
+            if (isIssueComment && !context.payload.issue?.pull_request) {
               console.log('issue_comment is on a regular issue (not a PR), skipping');
               return;
             }
-            if (context.eventName !== 'pull_request_target' && context.eventName !== 'issue_comment') {
+            if (!isPrTarget && !isIssueComment) {
               console.log(`Event ${context.eventName} not applicable for CLA comment, skipping`);
+              return;
+            }
+            if (isPrTarget && prTargetAction !== 'opened' && prTargetAction !== 'synchronize') {
+              console.log(`pull_request_target action '${prTargetAction}' — skipping CLA comment (only post on opened/synchronize)`);
               return;
             }
 
@@ -394,7 +404,10 @@ jobs:
             const existingComment = comments.find(c => c.body.includes(MARKER));
 
             if (existingComment) {
-              if (existingComment.body === body) {
+              if (isIssueComment) {
+                // On issue_comment events, never update — avoids re-pinging contributors who already signed
+                console.log(`CLA comment exists (id=${existingComment.id}); on issue_comment event, skipping update`);
+              } else if (existingComment.body === body) {
                 console.log(`Existing CLA comment already up to date (id=${existingComment.id}), skipping update`);
               } else {
                 await github.rest.issues.updateComment({
