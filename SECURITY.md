@@ -25,13 +25,14 @@ Knitli's authorization only covers activities you conduct yourself against asset
 #### In Scope
 
 > - Marque source code in the marquetools GitHub organization
-> - Released Marque artifacts distributed through our official channels (crates.io, PyPI, npm, GitHub Releases)
+> - Source code for any repository in the Knitli GitHub organization
+> - Released Marque or Knitli artifacts distributed through our official channels (crates.io, PyPI, npm, GitHub Releases)
 > - Knitli-operated infrastructure directly supporting Marque (marque.tools, *.marque.tools, knitli.com, *.knitli.com)
-> - Marque hosted services operated by Knitli (none currently; we'll list them here when they exist)
+> - Marque or Knitli hosted services operated by Knitli (none currently; we'll list them here when they exist)
 
 #### Out of Scope
 
-> - Deployments of Marque operated by customers, contractors, or other third parties — report those to the operator
+> - Deployments of Marque or any other Knitli customers operated by customers, contractors, or other third parties — report those to the operator
 > - Third-party dependencies of Marque — report upstream, and let us know so we can coordinate
 > - Social engineering attacks against Knitli personnel, customers, or contractors
 > - Physical attacks against Knitli facilities or personnel (not advised; I have a special set of skills...)
