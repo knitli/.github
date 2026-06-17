@@ -1,36 +1,18 @@
 # 🧵 Knitli
 
-**We build the context layer for AI — infrastructure that makes agents efficient, predictable, and human-friendly.** 🧵
+**We build tools worthy of the work.**
 
-Knitli is rethinking how humans and AI work together.
-Today’s AI agents are powerful but wasteful — constantly re-reading the same information, burning tokens on repetitive tasks (💲💲🪙), and struggling with context.
+## What's Coming
 
-We’re building tools that give **AI agents and humans the right context** — so both can work faster, smarter, and with less waste.
+In Summer 2026 we'll announce our new focus and product, Marque. [Check the site regularly for when it goes live](https://marque.tools).
 
----
+### Past Efforts
 
-## 🗻 Our Vision
+Knitli started with a focus on AI-adjacent developer tools in June 2025. We're really proud of [CodeWeaver](https://github.com/knitli/codeweaver) and [Thread](https://github.com/knitli/thread) in our year working on them.
+We still think they are unique in the space and better architected than comparable solutions today. But, we struggled to find traction in the crowded developer market space.
+Both are still available, open source -- please fork and make something great with them.
 
-A world where AI fits seamlessly into human workflows. No prompt engineering. No repetitive context or information overload. **Just tools that make sense for humans *and* agents.** 🤖👩‍🎨
-
----
-
-## 🌟 What We’re About
-
-* **Context is king** – everything starts with the right information at the right time.
-* **Humans first** – design for people, not prompts. Technology should solve real problems without causing new ones.
-* **Build in the open** – our core is and will always be open source.
-
----
-
-## 🛠️ Current Projects
-
-* **Context Layer SDK** – core libraries and APIs to feed structured, predictive, context to AI agents.
-
-  * [**CodeWeaver**](https://github.com/knitli/codeweaver-mcp) – a tailored context delivery platform, appearing as an MCP server.
-  * [**Thread**](https://github.com/knitli/thread) – a platform-agnostic, real-time codebase intelligence engine using graphs + ASTs to keep agents continuously and correctly informed.
-* **UI Experiments** – early explorations to make powerful tools intuitive for non-technical users. 
-
+We're shifting to a completely different space but with our same focus on architectural solutions, human-centric design, and an intense focus on quality.
 ---
 
 ## 🤝 How to Get Involved
