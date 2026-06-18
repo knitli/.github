@@ -56,10 +56,8 @@ You can report a vulnerability through one of the following channels:
 
 1. **GitHub Private Vulnerability Reporting (preferred)**
    Use GitHub security advisories reporting for the relevant product or deployment.
-   - [Marque application](https://github.com/marquetools/marque/security/advisories/new)
-   - [CodeWeaver application](https://github.com/marquetools/marque/security/advisories/new)
-   - [Thread application](https://github.com/marquetools/marque/security/advisories/new)
-   - [Everything else](https://github.com/marquetools/.github/security/advisories/new)
+   - [Marque application](https://github.com/knitli/marque/security/advisories/new)
+   - [Everything else](https://github.com/knitli/.github/security/advisories/new)
 
    With this method, you may optionally submit a private pull request with a fix. Learn more [in the GitHub docs](https://docs.github.com/en/code-security/how-tos/report-and-fix-vulnerabilities/privately-reporting-a-security-vulnerability).
 
