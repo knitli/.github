@@ -6,6 +6,8 @@
 > [!IMPORTANT]
 > Please **do not report security vulnerabilities in our public issues or discussions**. This may allow attackers to exploit the vulnerability before we have a chance to fix it.
 
+Seriously, ☝️. 
+
 ## Reporting a Vulnerability
 
 Our customers expect uncompromising security, and we're obsessive about delivering it. We take security vulnerabilities seriously and **appreciate responsible disclosure.**
@@ -24,10 +26,11 @@ Knitli's authorization only covers activities you conduct yourself against asset
 
 #### In Scope
 
-> - Marque source code in the marquetools GitHub organization
-> - Source code for any repository in the Knitli GitHub organization
+> - [Marque source code](https://github.com/knitli/marque)
+> - Source code for any repository in the Knitli or marquetools GitHub organization
 > - Released Marque or Knitli artifacts distributed through our official channels (crates.io, PyPI, npm, GitHub Releases)
 > - Knitli-operated infrastructure directly supporting Marque (marque.tools, *.marque.tools, knitli.com, *.knitli.com)
+> - Knitli corporate infrastructure and backend services and automations
 > - Marque or Knitli hosted services operated by Knitli (none currently; we'll list them here when they exist)
 
 #### Out of Scope
@@ -66,7 +69,7 @@ You can report a vulnerability through one of the following channels:
 
 ### What to Include
 
-Please include as much of the following information as possible in your report:
+Please include as much of the following information as possible in your report (when applicable):
 
 1. **Type of issue** (e.g. cross-site scripting, authentication bypass, etc.)
 2. **Full paths of source file(s) at the root of the issue** (if relevant)
