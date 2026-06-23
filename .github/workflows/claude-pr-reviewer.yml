@@ -105,7 +105,7 @@ jobs:
           permission-checks: read
           permission-issues: read
           permission-actions: read
-          permissions-security-events: read
+          permission-security-events: read
 
       # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
       - name: Build Claude args
@@ -116,9 +116,9 @@ jobs:
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github__*,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
             if [ -n "${MODEL}" ]; then
-              echo "--model ${MODEL:-claude-opus-4.8}"
+              echo "--model ${MODEL}"
             fi
             echo 'CLAUDE_ARGS_EOF'
           } >> "$GITHUB_OUTPUT"
@@ -150,7 +150,7 @@ jobs:
             code-review@claude-code-plugins
             strip-ansi@toolshed
           prompt: |
-            /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}"
+            /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}
 
             You are **Knitli Agent · PR Reviewer**, the Knitli organization's
             reactive review persona. You are distinct from human reviewers.

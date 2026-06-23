@@ -1,0 +1,168 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable Claude Docs workflow for all Knitli repositories.
+#
+# A reactive, persona-driven Claude agent that makes documentation changes under
+# the `knitli-agent[bot]` identity — the same GitHub App as the other personas,
+# with the persona ("Knitli Agent · Docs") expressed through branding, not a
+# separate handle. It is on-demand only: it acts when a maintainer mentions the
+# docs alias, then opens a pull request with the change.
+#
+# Permission model — three layers scope this bot to "docs changes via PR":
+#   1. Minted App token is down-scoped to contents:write + pull-requests:write
+#      (to push a branch and open a PR) + issues:read.
+#   2. The job's GITHUB_TOKEN carries only the scopes the action needs.
+#   3. `--allowedTools` gives Claude file edits + git/gh plus the GitHub MCP
+#      servers — no arbitrary build/test runners. The prompt forbids source-code
+#      logic changes and pushing to the default branch.
+#
+# See examples/claude-docs.yml for a ready-to-copy caller workflow.
+
+name: Claude Docs
+
+on:
+  workflow_call:
+    inputs:
+      docs_alias:
+        description: 'Comment mention that triggers an on-demand docs change'
+        required: false
+        type: string
+        default: '@knitli-docs'
+      model:
+        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App'
+        required: true
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App'
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Org subscription OAuth token for Claude Code'
+        required: true
+
+# Layer 2: all author-facing writes (commits, the PR, comments) flow through the
+# down-scoped App token minted below, which is what makes them post as
+# knitli-agent[bot].
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  id-token: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: claude-docs-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    # On-demand only: a comment mentioning the docs alias on an issue or a PR
+    # (including a diff-line review comment).
+    if: >-
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, inputs.docs_alias)) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, inputs.docs_alias))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+      id-token: write
+      actions: read
+      checks: read
+    steps:
+      # Layer 1: mint an App token narrowed to what a docs PR needs — write to
+      # contents and pull-requests, read issues for context.
+      - name: Mint down-scoped app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: read
+
+      # Layer 3: file edits + git/gh + the GitHub MCP servers. No build/test
+      # runners — this persona only touches documentation.
+      - name: Build Claude args
+        id: args
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<CLAUDE_ARGS_EOF'
+            echo '--allowedTools "mcp__github_*,Edit,Write,Read,Glob,Grep,Agent(Explore),WebFetch(domain:*),Bash(git:*),Bash(gh:*),Bash(* --help),Bash(* --version)"'
+            if [ -n "${MODEL}" ]; then
+              echo "--model ${MODEL}"
+            fi
+            echo 'CLAUDE_ARGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+         token: ${{ steps.app-token.outputs.token }}
+         persist-credentials: true
+         fetch-depth: 0
+         submodules: recursive
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name 'knitli-agent[bot]'
+          git config --global user.email '142185322+knitli-agent[bot]@users.noreply.github.com'
+
+      - name: Claude docs
+        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        with:
+          bot_id: 142185322
+          bot_name: >-
+            knitli-agent[bot]
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: ${{ steps.args.outputs.value }}
+          additional_permissions: |
+            actions: read
+            checks: read
+          allowed_bots: >-
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          prompt: |
+            You are **Knitli Agent · Docs**, the Knitli organization's reactive
+            documentation persona. You are distinct from human maintainers. Be
+            precise and conservative — change only what the request asks for.
+
+            You were invoked on ${{ github.repository }} by a comment containing
+            the docs alias.
+
+            1. Read the triggering issue or PR and the comment to understand
+               exactly what documentation change is requested (`gh issue view`,
+               `gh pr view`, `gh pr diff`). Explore the repo for the relevant
+               docs (Agent(Explore), Grep, Glob, Read).
+            2. Make the smallest correct documentation edits — READMEs, guides,
+               docstrings/doc comments, changelog entries. Do NOT change
+               application or source-code logic; if a doc fix would require a
+               code change, say so in a comment and stop.
+            3. Create a branch named `knitli-agent/docs-<short-slug>`, commit
+               your changes with a clear message, push it, and open a pull
+               request with `gh pr create` that references the triggering issue
+               or PR. The PR body must begin with this exact header line:
+
+                   ## 🧶 Knitli Agent · Docs
+
+               followed by a short summary of what you changed and why.
+            4. Reply once on the triggering thread (`gh issue comment` or
+               `gh pr comment`) with the same header and a link to the PR.
+
+            Never push to the default branch and never force-push. If you cannot
+            determine a concrete docs change, post one comment explaining what
+            you need and stop without opening a PR.

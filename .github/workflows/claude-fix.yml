@@ -1,0 +1,174 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable Claude Fix (general implementation) workflow for all Knitli repos.
+#
+# A reactive, persona-driven Claude agent that implements small, tested code
+# changes under the `knitli-agent[bot]` identity — the same GitHub App as the
+# other personas, with the persona ("Knitli Agent · Fix") expressed through
+# branding, not a separate handle. This is the highest-trust persona: it edits
+# code, runs the project's test/lint commands, and opens a pull request. It is
+# on-demand only — it acts when a maintainer mentions the fix alias.
+#
+# Permission model — three layers scope this bot to "code changes via PR":
+#   1. Minted App token is down-scoped to contents:write + pull-requests:write
+#      (push a branch, open a PR) + issues:write (comment/link) + checks:read.
+#   2. The job's GITHUB_TOKEN carries only the scopes the action needs.
+#   3. `--allowedTools` gives Claude file edits + git/gh + common build/test
+#      runners + the GitHub MCP servers. The prompt forbids pushing to the
+#      default branch, force-pushing, and weakening tests.
+#
+# See examples/claude-fix.yml for a ready-to-copy caller workflow.
+
+name: Claude Fix
+
+on:
+  workflow_call:
+    inputs:
+      fix_alias:
+        description: 'Comment mention that triggers an on-demand fix'
+        required: false
+        type: string
+        default: '@knitli-fix'
+      model:
+        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App'
+        required: true
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App'
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Org subscription OAuth token for Claude Code'
+        required: true
+
+# Layer 2: all author-facing writes (commits, the PR, comments) flow through the
+# down-scoped App token minted below, which is what makes them post as
+# knitli-agent[bot].
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: claude-fix-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    # On-demand only: a comment mentioning the fix alias on an issue or a PR
+    # (including a diff-line review comment).
+    if: >-
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, inputs.fix_alias)) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, inputs.fix_alias))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+      checks: read
+    steps:
+      # Layer 1: mint an App token narrowed to what an implementation PR needs.
+      - name: Mint down-scoped app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-checks: read
+
+      # Layer 3: file edits + git/gh + common build/test runners + the GitHub
+      # MCP servers. Extend the runner list to match your repo's toolchain.
+      - name: Build Claude args
+        id: args
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<CLAUDE_ARGS_EOF'
+            echo '--allowedTools "mcp__github_*,Edit,Write,Read,Glob,Grep,Agent(Explore),WebFetch(domain:*),Bash(git:*),Bash(gh:*),Bash(mise:*),Bash(make:*),Bash(npm:*),Bash(pnpm:*),Bash(yarn:*),Bash(bun:*),Bash(uv:*),Bash(uvx:*),Bash(cargo:*),Bash(go:*),Bash(pytest:*),Bash(* --help),Bash(* --version)"'
+            if [ -n "${MODEL}" ]; then
+              echo "--model ${MODEL}"
+            fi
+            echo 'CLAUDE_ARGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+         token: ${{ steps.app-token.outputs.token }}
+         persist-credentials: true
+         fetch-depth: 0
+         submodules: recursive
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name 'knitli-agent[bot]'
+          git config --global user.email '142185322+knitli-agent[bot]@users.noreply.github.com'
+
+      - name: Claude fix
+        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        with:
+          bot_id: 142185322
+          bot_name: >-
+            knitli-agent[bot]
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: ${{ steps.args.outputs.value }}
+          additional_permissions: |
+            actions: read
+            checks: read
+          allowed_bots: >-
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          prompt: |
+            You are **Knitli Agent · Fix**, the Knitli organization's reactive
+            implementation persona. You are distinct from human engineers. You
+            hold a high bar: small, correct, well-tested changes only.
+
+            You were invoked on ${{ github.repository }} by a comment containing
+            the fix alias.
+
+            1. Read the triggering issue or PR thread to understand the desired
+               change (`gh issue view`, `gh pr view`, `gh pr diff`). If the
+               request is ambiguous or too large for a focused change, ask one
+               clarifying question on the thread and stop.
+            2. Explore the codebase (Agent(Explore), Grep, Glob, Read) to find
+               the right place to change. Make the smallest change that
+               correctly addresses the request, matching the existing patterns
+               and style around it.
+            3. Add or update tests that prove the change, and run the project's
+               test/lint commands where you can determine them (check for a
+               `mise.toml`, `Makefile`, `package.json`, `Cargo.toml`, etc.). Do
+               NOT weaken, skip, or delete tests to make them pass.
+            4. Create a branch named `knitli-agent/fix-<short-slug>`, commit with
+               a clear message, push, and open a pull request with `gh pr create`
+               referencing the triggering issue or PR. The PR body must begin
+               with this exact header line:
+
+                   ## 🧶 Knitli Agent · Fix
+
+               describing the problem, the fix, and how you verified it. Call out
+               anything you could not verify.
+            5. Reply once on the triggering thread with the same header and a
+               link to the PR.
+
+            Never push to the default branch and never force-push. If you cannot
+            produce a confident, tested fix, post one comment explaining why and
+            stop without opening a PR.

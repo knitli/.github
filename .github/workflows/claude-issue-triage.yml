@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable Claude Issue Triage workflow for all Knitli repositories.
+#
+# A reactive, persona-driven Claude agent that triages issues under the
+# `knitli-agent[bot]` identity — the same GitHub App as the PR reviewer, with the
+# persona ("Knitli Agent · Issue Triage") expressed through comment branding, not
+# a separate handle.
+#
+# Permission model — three layers keep this bot to "triage only":
+#   1. Minted App token is down-scoped to issues:write, contents:read,
+#      pull-requests:read (see "Mint down-scoped app token" below).
+#   2. The job's GITHUB_TOKEN stays read-only except for the issues:write it needs;
+#      all author-facing writes flow through the App token (so they post as
+#      knitli-agent[bot]).
+#   3. `--allowedTools` restricts Claude to the GitHub MCP servers plus read-only
+#      `gh` queries and label/comment commands — no git, no push, no file writes.
+#
+# See examples/claude-issue-triage.yml for a ready-to-copy caller workflow.
+
+name: Claude Issue Triage
+
+on:
+  workflow_call:
+    inputs:
+      triage_alias:
+        description: 'Comment mention that triggers an on-demand triage'
+        required: false
+        type: string
+        default: '@knitli-triage'
+      model:
+        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App'
+        required: true
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App'
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Org subscription OAuth token for Claude Code'
+        required: true
+
+# Layer 2: the workflow GITHUB_TOKEN stays minimal. All author-facing writes go
+# through the down-scoped App token minted below, which is what makes comments
+# and labels post as knitli-agent[bot].
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  id-token: write
+  actions: read
+  checks: read
+
+concurrency:
+  group: claude-issue-triage-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # Auto-triage on new/reopened issues; on-demand triage when a comment on an
+    # issue (not a PR) mentions the triage alias.
+    if: >-
+      github.event_name == 'issues' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request == null &&
+        contains(github.event.comment.body, inputs.triage_alias))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+      actions: read
+      checks: read
+    steps:
+      # Layer 1: mint an App token narrowed to exactly what a triager needs.
+      # Contents and pull-requests are read-only here; only issues is writable.
+      - name: Mint down-scoped app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: read
+          permission-pull-requests: read
+
+      # Layer 3: pin Claude to the GitHub MCP servers + read-only gh queries and
+      # label/comment commands.
+      - name: Build Claude args
+        id: args
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<CLAUDE_ARGS_EOF'
+            echo '--allowedTools "mcp__github_*,Bash(gh issue:*),Bash(gh label list:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh search:*),Agent(Explore),WebFetch(domain:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            if [ -n "${MODEL}" ]; then
+              echo "--model ${MODEL}"
+            fi
+            echo 'CLAUDE_ARGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+         token: ${{ steps.app-token.outputs.token }}
+         persist-credentials: false
+         submodules: recursive
+
+      - name: Claude issue triage
+        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        with:
+          bot_id: 142185322
+          bot_name: >-
+            knitli-agent[bot]
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: ${{ steps.args.outputs.value }}
+          additional_permissions: |
+            actions: read
+            checks: read
+          allowed_bots: >-
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          prompt: |
+            You are **Knitli Agent · Issue Triage**, the Knitli organization's
+            reactive issue-triage persona. You are distinct from human
+            maintainers. Be sharp, specific, and kind.
+
+            Triage issue #${{ github.event.issue.number }} in
+            ${{ github.repository }}:
+
+            1. Read the issue and its comments with `gh issue view`. Understand
+               what is actually being reported or requested. You may read related
+               code to ground your understanding.
+            2. List existing labels with `gh label list`, then apply only labels
+               that already exist in this repo — a type (bug/feature/docs/
+               question/etc.) plus area or severity labels when there is an
+               obvious match. Never invent labels.
+            3. Search for likely duplicates with `gh issue list --search ...`.
+               Link any strong candidates.
+            4. If acting on this issue requires information that is missing
+               (reproduction steps, version, expected vs. actual behavior, logs),
+               ask for exactly what's missing — concisely.
+            5. Post exactly one summary comment with `gh issue comment`,
+               beginning with this exact header line so readers know it's you:
+
+                   ## 🧶 Knitli Agent · Issue Triage
+
+               Follow the header with: a one-line restatement, the labels you
+               applied, any duplicate links, and a short "What's needed next"
+               list (or "Looks complete — ready for a maintainer." when nothing
+               is missing). Keep it scannable.
+
+            Do not close, assign, or edit the issue body. Labels and one summary
+            comment only.
