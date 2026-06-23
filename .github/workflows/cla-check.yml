@@ -330,6 +330,11 @@ jobs:
             exit 1
           fi
 
+      - name: Get User
+        id: cla-user
+        run: |
+          echo 'CLA_USER=${{ needs.check-cla.outputs.needs_cla_csv }}' >> "$GITHUB_ENV"
+
       - name: Post Multi-Author CLA Comment
         uses: actions/github-script@v7
         with:
@@ -438,6 +443,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
+          USERNAME: ${{ case(contains(',', env.CLA_USER || ''), format(env.CLA_USER || '', ',', ', @'), join(fromJson('["@", "env.CLA_USER"]'), '')) }}
         with:
           # Remote repository configuration
           remote-organization-name: knitli
@@ -465,7 +471,7 @@ jobs:
 
           # Custom PR comments
           custom-notsigned-prcomment: |
-            👋 Hey @${{ replace(needs.check-cla.outputs.needs_cla_csv, ',', ', @') }},
+            👋 Hey "$USERNAME",
 
             ## Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
 
