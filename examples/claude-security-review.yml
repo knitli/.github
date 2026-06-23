@@ -3,10 +3,10 @@
 #
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# Caller workflow for the Knitli Agent PR Reviewer.
+# Caller workflow for the Knitli Agent Security Review bot.
 #
 # Copy this file into a target repository at:
-#   .github/workflows/claude-pr-reviewer.yml
+#   .github/workflows/claude-security-review.yml
 #
 # All triggering, identity, permission down-scoping, and tool gating live in the
 # reusable workflow at knitli/.github. This caller just wires up the events and
@@ -17,7 +17,7 @@
 # forks are intentionally skipped — fork PRs have no access to secrets. See the
 # plan's "Deferred" section before changing this.
 
-name: Claude PR Reviewer
+name: Claude Security Review
 
 on:
   pull_request:
@@ -28,14 +28,17 @@ on:
     types: [created]
 
 jobs:
-  review:
+  security-review:
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       id-token: write
-    uses: knitli/.github/.github/workflows/claude-pr-reviewer.yml@main
+      actions: read
+      checks: read
+      security-events: read
+    uses: knitli/.github/.github/workflows/claude-security-review.yml@main
     secrets: inherit
     # Optional overrides:
     # with:
-    #   review_alias: '@knitli-review'
+    #   security_alias: '@knitli-security'
     #   model: 'claude-opus-4-8'

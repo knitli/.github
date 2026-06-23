@@ -1,0 +1,172 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable Claude Security Review workflow for all Knitli repositories.
+#
+# A reactive, persona-driven Claude agent that performs a focused application-
+# security pass on pull requests under the `knitli-agent[bot]` identity — the same
+# GitHub App as the PR reviewer, with the persona ("Knitli Agent · Security
+# Review") expressed through comment branding, not a separate handle.
+#
+# Permission model — three layers keep this bot to "review only":
+#   1. Minted App token is down-scoped to pull-requests:write, contents:read,
+#      security-events:read, checks:read (see "Mint down-scoped app token").
+#   2. The job's GITHUB_TOKEN stays read-only except for the pull-requests:write
+#      it needs; all writes flow through the App token (so comments post as
+#      knitli-agent[bot]).
+#   3. `--allowedTools` restricts Claude to the GitHub MCP servers plus read-only
+#      `gh pr` commands — no git, no push, no file writes.
+#
+# See examples/claude-security-review.yml for a ready-to-copy caller workflow.
+
+name: Claude Security Review
+
+on:
+  workflow_call:
+    inputs:
+      security_alias:
+        description: 'Comment mention that triggers an on-demand security review'
+        required: false
+        type: string
+        default: '@knitli-security'
+      model:
+        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App'
+        required: true
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App'
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Org subscription OAuth token for Claude Code'
+        required: true
+
+# Layer 2: the workflow GITHUB_TOKEN stays read-only. All writes go through the
+# down-scoped App token minted below, which is what makes comments post as
+# knitli-agent[bot].
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+  actions: read
+  checks: read
+  security-events: read
+
+concurrency:
+  group: claude-security-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  security-review:
+    # Auto-review on PR events; on-demand review when a comment mentions the
+    # security alias on a PR (issue_comment) or on a diff line (review comment).
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, inputs.security_alias)) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, inputs.security_alias))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: read
+      security-events: read
+    steps:
+      # Layer 1: mint an App token narrowed to exactly what a security reviewer
+      # needs. Contents is read-only even though the App ceiling allows write.
+      - name: Mint down-scoped app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+          permission-checks: read
+          permission-security-events: read
+
+      # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
+      - name: Build Claude args
+        id: args
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<CLAUDE_ARGS_EOF'
+            echo '--allowedTools "mcp__github_*,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            if [ -n "${MODEL}" ]; then
+              echo "--model ${MODEL}"
+            fi
+            echo 'CLAUDE_ARGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+         token: ${{ steps.app-token.outputs.token }}
+         persist-credentials: false
+         submodules: recursive
+
+      - name: Claude security review
+        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        with:
+          bot_id: 142185322
+          bot_name: >-
+            knitli-agent[bot]
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: ${{ steps.args.outputs.value }}
+          additional_permissions: |
+            actions: read
+            checks: read
+            security-events: read
+          allowed_bots: >-
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          prompt: |
+            You are **Knitli Agent · Security Review**, the Knitli organization's
+            reactive application-security persona. You are distinct from human
+            reviewers. Be precise, evidence-based, and non-alarmist — every
+            finding you report must be real and plausibly exploitable.
+
+            Security-review the current pull request (${{ github.repository }}
+            #${{ github.event.pull_request.number }}):
+
+            1. Read the change with `gh pr view` and `gh pr diff`. Review only
+               what the diff introduces or modifies; read surrounding code only
+               to ground a finding.
+            2. Hunt for real vulnerabilities introduced by this change:
+               injection (SQL / command / path / template), authn & authz gaps,
+               secret or credential exposure, SSRF, unsafe deserialization,
+               missing or wrong input validation, insecure crypto, unsafe
+               handling of untrusted input, and dependency risks the diff adds.
+               Consult related code-scanning alerts when relevant.
+            3. For each concrete, exploitable issue, attach an inline comment on
+               the exact diff line(s) with
+               `mcp__github_inline_comment__create_inline_comment` (use
+               `confirmed: true`). State the attack, the impact, and a concrete
+               fix — prefer a suggested fix when you can give one.
+            4. Do NOT report style, theoretical, or defense-in-depth nits as
+               findings. Mention those at most as a single optional note.
+            5. Post exactly one summary comment with `gh pr comment`, beginning
+               with this exact header line so readers know it's you:
+
+                   ## 🧶 Knitli Agent · Security Review
+
+               Follow the header with a one-line verdict, then a short,
+               severity-ordered list of confirmed findings (or "No security
+               issues found in this diff." when the change is clean). Keep it
+               scannable.
+
+            If the diff is empty or you cannot read it, say so in the summary
+            comment and stop.
