@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable Claude PR Reviewer workflow for all Knitli repositories.
+#
+# A reactive, persona-driven Claude agent that reviews pull requests under the
+# `knitli-agent[bot]` identity — clearly distinct from human users and from
+# `github-actions[bot]`. The persona ("Knitli Agent · PR Reviewer") is expressed
+# through comment branding, not a separate GitHub handle.
+#
+# Permission model — three layers of enforcement keep this bot to "review only":
+#   1. Minted App token is down-scoped to pull-requests:write, contents:read,
+#      checks:read (see "Mint down-scoped app token" below).
+#   2. The job's GITHUB_TOKEN is read-only (`permissions:` block).
+#   3. `--allowedTools` restricts Claude to the inline-comment MCP server plus
+#      `gh pr comment|diff|view` — no git, no push, no file writes.
+#
+# Usage in your repository (.github/workflows/claude-pr-reviewer.yml):
+#   jobs:
+#     review:
+#       permissions:
+#         contents: read
+#         pull-requests: read
+#         id-token: write
+#       uses: knitli/.github/.github/workflows/claude-pr-reviewer.yml@main
+#       secrets: inherit
+#
+# See examples/claude-pr-reviewer.yml for a ready-to-copy caller workflow.
+
+name: Claude PR Reviewer
+
+on:
+  workflow_call:
+    inputs:
+      review_alias:
+        description: 'Comment mention that triggers an on-demand review'
+        required: false
+        type: string
+        default: '@knitli-review'
+      model:
+        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      KNITLI_AGENT_APP_ID:
+        description: 'App ID for the knitli-agent GitHub App'
+        required: true
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App'
+        required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Org subscription OAuth token for Claude Code'
+        required: true
+
+# Layer 2: the workflow GITHUB_TOKEN stays read-only. All writes go through the
+# down-scoped App token minted below, which is what makes comments post as
+# knitli-agent[bot].
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+  actions: read
+  checks: read
+  security-events: read
+  issues: read
+
+concurrency:
+  group: claude-pr-reviewer-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Auto-review on PR events; on-demand review when a comment mentions the
+    # review alias on a PR (issue_comment) or on a diff line (review comment).
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, inputs.review_alias)) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, inputs.review_alias))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+      actions: read
+      security-events: read
+      checks: read
+      issues: read
+    steps:
+      # Layer 1: mint an App token narrowed to exactly what a reviewer needs.
+      # Contents is read-only here even though the App ceiling allows write.
+      - name: Mint down-scoped app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.KNITLI_AGENT_APP_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+          permission-checks: read
+
+      # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
+      - name: Build Claude args
+        id: args
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<CLAUDE_ARGS_EOF'
+            echo '--allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+            if [ -n "${MODEL}" ]; then
+              echo "--model ${MODEL}"
+            fi
+            echo 'CLAUDE_ARGS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Claude PR review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          claude_args: ${{ steps.args.outputs.value }}
+          prompt: |
+            You are **Knitli Agent · PR Reviewer**, the Knitli organization's
+            reactive review persona. You are an AI agent, not a deterministic
+            bot, and you are distinct from human reviewers. Be sharp, specific,
+            and kind.
+
+            Review the current pull request:
+            1. Run `gh pr view` and `gh pr diff` to read the change and its
+               description. Only review what the diff actually changes.
+            2. For each concrete problem, attach an inline comment on the exact
+               diff line(s) with `mcp__github_inline_comment__create_inline_comment`
+               (use `confirmed: true`). Prefer a suggested fix when you can give
+               one. Focus on: correctness bugs, security issues, broken error
+               handling, data-integrity risks, and clear violations of patterns
+               already used elsewhere in the diff. Skip nits and style the repo's
+               formatter would catch.
+            3. Post exactly one summary comment with `gh pr comment`, beginning
+               with this exact header line so readers know it's you:
+
+                   ## 🧶 Knitli Agent · PR Reviewer
+
+               Follow the header with a 1-2 sentence verdict, then a short
+               bulleted list of the most important findings (or "No blocking
+               issues found." when the change looks good). Keep it scannable.
+
+            You have review access only: no commits, no pushes, no file edits.
+            If the diff is empty or you cannot read it, say so in the summary
+            comment and stop.
