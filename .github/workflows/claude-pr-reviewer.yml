@@ -103,6 +103,9 @@ jobs:
           permission-pull-requests: write
           permission-contents: read
           permission-checks: read
+          permission-issues: read
+          permission-actions: read
+          permissions-security-events: read
 
       # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
       - name: Build Claude args
