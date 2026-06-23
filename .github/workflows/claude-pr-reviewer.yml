@@ -45,8 +45,8 @@ on:
         type: string
         default: ''
     secrets:
-      KNITLI_AGENT_APP_ID:
-        description: 'App ID for the knitli-agent GitHub App'
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App'
         required: true
       KNITLI_AGENT_PRIVATE_KEY:
         description: 'Private key (.pem) for the knitli-agent GitHub App'
@@ -60,7 +60,7 @@ on:
 # knitli-agent[bot].
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   id-token: write
   actions: read
   checks: read
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       id-token: write
       actions: read
       security-events: read
@@ -96,9 +96,9 @@ jobs:
       # Contents is read-only here even though the App ceiling allows write.
       - name: Mint down-scoped app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ secrets.KNITLI_AGENT_APP_ID }}
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
           private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
           permission-pull-requests: write
           permission-contents: read
@@ -116,35 +116,63 @@ jobs:
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+            echo '--allowedTools "mcp__github__*,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
             if [ -n "${MODEL}" ]; then
-              echo "--model ${MODEL}"
+              echo "--model ${MODEL:-claude-opus-4.8}"
             fi
             echo 'CLAUDE_ARGS_EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Claude PR review
-        uses: anthropics/claude-code-action@v1
+      - name: Checkout repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
+         token: ${{ steps.app-token.outputs.token }}
+         persist-credentials: false
+         submodules: recursive
+
+      - name: Claude PR review
+        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        with:
+          bot_id: 142185322
+          bot_name: >-
+            knitli-agent[bot]
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
           claude_args: ${{ steps.args.outputs.value }}
+          additional_permissions: |
+            actions: read
+            checks: read
+          allowed_bots: >-
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          plugin-marketplaces: |
+            knitli/toolshed
+          plugins: |
+            code-review@claude-code-plugins
+            strip-ansi@toolshed
           prompt: |
+            /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}"
+
             You are **Knitli Agent · PR Reviewer**, the Knitli organization's
-            reactive review persona. You are an AI agent, not a deterministic
-            bot, and you are distinct from human reviewers. Be sharp, specific,
-            and kind.
+            reactive review persona. You are distinct from human reviewers.
+            Be sharp, specific, and kind.
+
+            Hold high standards. You are the primary defense from poor quality
+            implementations, stale docs, and hallucinations.
+
+            You have access to read related checks, issues, security-events, actions.
 
             Review the current pull request:
             1. Run `gh pr view` and `gh pr diff` to read the change and its
-               description. Only review what the diff actually changes.
+               description. Only review what the diff actually changes. You may
+               examine related code to understand the context of the PR.
             2. For each concrete problem, attach an inline comment on the exact
                diff line(s) with `mcp__github_inline_comment__create_inline_comment`
                (use `confirmed: true`). Prefer a suggested fix when you can give
                one. Focus on: correctness bugs, security issues, broken error
                handling, data-integrity risks, and clear violations of patterns
-               already used elsewhere in the diff. Skip nits and style the repo's
-               formatter would catch.
+               already used elsewhere in the diff. Nits should be isolated to
+               correcting stale docs, misleading language or field names,
+               important missing information.
             3. Post exactly one summary comment with `gh pr comment`, beginning
                with this exact header line so readers know it's you:
 
@@ -154,6 +182,5 @@ jobs:
                bulleted list of the most important findings (or "No blocking
                issues found." when the change looks good). Keep it scannable.
 
-            You have review access only: no commits, no pushes, no file edits.
             If the diff is empty or you cannot read it, say so in the summary
             comment and stop.
