@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ''
+      context:
+        description: 'A url or information regarding the context around the call, such as the message the user invoked the agent in.'
+        type: string
+        default: ''
+        required: false
     secrets:
       KNITLI_AGENT_CLIENT_ID:
         description: 'Client ID for the knitli-agent GitHub App'
@@ -66,11 +71,6 @@ jobs:
   docs:
     # On-demand only: a comment mentioning the docs alias on an issue or a PR
     # (including a diff-line review comment).
-    if: >-
-      (github.event_name == 'issue_comment' &&
-        contains(github.event.comment.body, inputs.docs_alias)) ||
-      (github.event_name == 'pull_request_review_comment' &&
-        contains(github.event.comment.body, inputs.docs_alias))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,9 +88,11 @@ jobs:
         with:
           client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
           private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-actions: read
           permission-contents: write
           permission-pull-requests: write
           permission-issues: read
+          permission-checks: read
 
       # Layer 3: file edits + git/gh + the GitHub MCP servers. No build/test
       # runners — this persona only touches documentation.
@@ -124,6 +126,16 @@ jobs:
 
       - name: Claude docs
         uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        env:
+          ISSUE_OR_PR_NUMBER: |-
+            ${{ case(
+              github.event.pull_request != null, 
+              github.event.pull_request.number,
+              github.event_name == 'issue_comment',
+              github.event.issue.number,
+              ''
+              ) }}
+            EVENT_TYPE: ${{ github.event_name }}
         with:
           bot_id: 142185322
           bot_name: >-
@@ -137,12 +149,21 @@ jobs:
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
           prompt: |
+            REPO: ${{ github.repository }}
+            EVENT: "$EVENT_TYPE"
+            NUMBER: "$ISSUE_OR_PR_NUMBER"
             You are **Knitli Agent · Docs**, the Knitli organization's reactive
             documentation persona. You are distinct from human maintainers. Be
             precise and conservative — change only what the request asks for.
 
             You were invoked on ${{ github.repository }} by a comment containing
             the docs alias.
+
+            *Repo context.** ${{ github.repository }} provided the following context:
+
+            ---
+            ${{ inputs.context || github.event.comment.body }}
+            ---
 
             1. Read the triggering issue or PR and the comment to understand
                exactly what documentation change is requested (`gh issue view`,
