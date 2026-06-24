@@ -66,13 +66,6 @@ jobs:
   security-review:
     # Auto-review on PR events; on-demand review when a comment mentions the
     # security alias on a PR (issue_comment) or on a diff line (review comment).
-    if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request != null &&
-        contains(github.event.comment.body, inputs.security_alias)) ||
-      (github.event_name == 'pull_request_review_comment' &&
-        contains(github.event.comment.body, inputs.security_alias))
     runs-on: ubuntu-latest
     permissions:
       contents: read
