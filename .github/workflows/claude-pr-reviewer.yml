@@ -64,7 +64,6 @@ permissions:
   id-token: write
   actions: read
   checks: read
-  security-events: read
   issues: read
 
 concurrency:
@@ -88,7 +87,6 @@ jobs:
       pull-requests: write
       id-token: write
       actions: read
-      security-events: read
       checks: read
       issues: read
     steps:
@@ -105,7 +103,6 @@ jobs:
           permission-checks: read
           permission-issues: read
           permission-actions: read
-          permission-security-events: read
 
       # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
       - name: Build Claude args
