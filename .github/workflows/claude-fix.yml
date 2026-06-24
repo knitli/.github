@@ -99,7 +99,7 @@ jobs:
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_*,Edit,Write,Read,Glob,Grep,Agent(Explore),WebFetch(domain:*),Bash(git:*),Bash(gh:*),Bash(mise:*),Bash(make:*),Bash(npm:*),Bash(pnpm:*),Bash(yarn:*),Bash(bun:*),Bash(uv:*),Bash(uvx:*),Bash(cargo:*),Bash(go:*),Bash(pytest:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,Edit,Write,Read,Glob,Grep,Agent(*),WebFetch(domain:*),Bash(git:*),Bash(gh:*),Bash(mise:*),Bash(make:*),Bash(npm:*),Bash(pnpm:*),Bash(yarn:*),Bash(bun:*),Bash(uv:*),Bash(uvx:*),Bash(cargo:*),Bash(go:*),Bash(pytest:*),Bash(* --help),Bash(* --version)"'
             if [ -n "${MODEL}" ]; then
               echo "--model ${MODEL}"
             fi
