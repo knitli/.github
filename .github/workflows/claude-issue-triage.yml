@@ -46,9 +46,6 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Org subscription OAuth token for Claude Code'
         required: true
-      GITHUB_TOKEN:
-        description: 'Repo github token'
-        required: true
 
 # Layer 2: the workflow GITHUB_TOKEN stays minimal. All author-facing writes go
 # through the down-scoped App token minted below, which is what makes comments
