@@ -143,11 +143,8 @@ jobs:
             checks: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
-          plugin-marketplaces: |
-            knitli/toolshed
           plugins: |
             code-review@claude-code-plugins
-            strip-ansi@toolshed
           prompt: |
             /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}
 
