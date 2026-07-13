@@ -51,9 +51,6 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Org subscription OAuth token for Claude Code'
         required: true
-      GITHUB_TOKEN:
-        description: "Caller's GitHub token"
-        required: true
 
 # Layer 2: all author-facing writes (commits, the PR, comments) flow through the
 # down-scoped App token minted below, which is what makes them post as
