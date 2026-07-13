@@ -54,9 +54,6 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Org subscription OAuth token for Claude Code'
         required: true
-      GITHUB_TOKEN:
-        required: true
-        description: 'Caller github token'
 
 # Layer 2: the workflow GITHUB_TOKEN stays read-only. All writes go through the
 # down-scoped App token minted below, which is what makes comments post as
