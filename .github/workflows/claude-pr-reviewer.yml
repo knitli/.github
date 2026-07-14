@@ -147,7 +147,7 @@ jobs:
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
           plugins: |
-            code-review@claude-plugins-official
+            code-review@anthropics/claude-plugins-official
           prompt: |
             /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}
 
