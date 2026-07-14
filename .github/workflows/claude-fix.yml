@@ -122,7 +122,7 @@ jobs:
           git config --global user.email '142185322+knitli-agent[bot]@users.noreply.github.com'
 
       - name: Claude fix
-        uses: anthropics/claude-code-action@360be9c8fc5d80cb33661e0ffd33dcef4c7155aa
+        uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3
         with:
           bot_id: 142185322
           bot_name: >-
