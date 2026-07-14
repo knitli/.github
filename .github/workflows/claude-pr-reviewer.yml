@@ -140,11 +140,14 @@ jobs:
           claude_args: ${{ steps.args.outputs.value }}
           additional_permissions: |
             actions: read
+            contents: write
+            pull-requests: write
             checks: read
+            issues: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
           plugins: |
-            code-review@claude-code-plugins
+            code-review@claude-plugins-official
           prompt: |
             /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}
 
