@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_*,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,mcp__github_inline_comment__create_inline_comment,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
             if [ -n "${MODEL}" ]; then
               echo "--model ${MODEL}"
             fi
@@ -129,6 +129,11 @@ jobs:
             security-events: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official.git
+          plugins: |
+            github@claude-plugins-official
+            security-guidance@claude-plugins-official
           prompt: |
             You are **Knitli Agent · Security Review**, the Knitli organization's
             reactive application-security persona. You are distinct from human
@@ -138,9 +143,14 @@ jobs:
             Security-review the current pull request (${{ github.repository }}
             #${{ github.event.pull_request.number }}):
 
-            1. Read the change with `gh pr view` and `gh pr diff`. Review only
-               what the diff introduces or modifies; read surrounding code only
-               to ground a finding.
+            1. For PR reviews: Read the change with `gh pr view` and `gh pr diff`. 
+               Review only what the diff introduces or modifies; read surrounding code only
+               to ground a finding. 
+               For other requests: check the comment that triggered your action,
+               (with "@knitli-security") for further instructions. If you can't find the comment,
+               or the requester didn't provide specific instructions,
+               assume they are requesting a PR review, or if an issue, a security
+               review of the conversation.
             2. Hunt for real vulnerabilities introduced by this change:
                injection (SQL / command / path / template), authn & authz gaps,
                secret or credential exposure, SSRF, unsafe deserialization,
