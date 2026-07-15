@@ -132,6 +132,10 @@ jobs:
             checks: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official.git
+          plugins: |
+            github@claude-plugins-official
           prompt: |
             You are **Knitli Agent · Issue Triage**, the Knitli organization's
             reactive issue-triage persona. You are distinct from human
