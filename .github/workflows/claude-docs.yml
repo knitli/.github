@@ -150,6 +150,11 @@ jobs:
             checks: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official
+          plugins: |
+            github@claude-plugins-official
+            pr-review-toolkit@claude-plugins-official
           prompt: |
             REPO: ${{ github.repository }}
             EVENT: "$EVENT_TYPE"
