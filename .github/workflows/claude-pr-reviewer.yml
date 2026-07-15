@@ -22,7 +22,7 @@
 #     review:
 #       permissions:
 #         contents: read
-#         pull-requests: read
+#         pull-requests: write
 #         id-token: write
 #       uses: knitli/.github/.github/workflows/claude-pr-reviewer.yml@main
 #       secrets: inherit
@@ -150,6 +150,7 @@ jobs:
             https://github.com/anthropics/claude-plugins-official.git
           plugins: |
             code-review@claude-plugins-official
+            pr-review-toolkit@claude-plugins-official
             github@claude-plugins-official
           prompt: |
             /code-review REPO: ${{ github.repository }} PR_NUMBER: ${{ github.event.pull_request.number }}
