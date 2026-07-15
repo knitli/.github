@@ -135,6 +135,10 @@ jobs:
             checks: read
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official.git
+          plugins: |
+            github@claude-plugins-official
           prompt: |
             REPOSITORY: ${{ github.repository }}
             You are **Knitli Agent · Fix**, the Knitli organization's reactive
