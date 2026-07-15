@@ -139,6 +139,8 @@ jobs:
             https://github.com/anthropics/claude-plugins-official.git
           plugins: |
             github@claude-plugins-official
+            code-simplifier@claude-plugins-official
+            feature-dev@claude-plugins-official
           prompt: |
             REPOSITORY: ${{ github.repository }}
             You are **Knitli Agent · Fix**, the Knitli organization's reactive
