@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_*,mcp__github_inline_comment__create_inline_comment,Bash(gh pr:*),Agent(Explore),WebFetch(domain:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,mcp__github_inline_comment__create_inline_comment,Agent(Explore),WebFetch(domain:*),Bash(gh:*),Bash(* --help),Bash(* --version),ReadMcpResourceTool(*),SendMessage(*),Skill(*),ToolSearch(*),TaskList(*),TaskGet(*),TaskCreate(*),TaskStop(*),Grep(*),Glob(*),Read(*)"'
             if [ -n "${MODEL}" ]; then
               echo "--model ${MODEL}"
             fi
@@ -116,6 +116,8 @@ jobs:
 
       - name: Claude security review
         uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           bot_id: 142185322
           bot_name: >-
