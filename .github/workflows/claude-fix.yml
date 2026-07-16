@@ -97,11 +97,12 @@ jobs:
         id: args
         env:
           MODEL: ${{ inputs.model }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_*,Edit,Write,Read,Glob,Grep,Agent(*),WebFetch(domain:*),Bash(git:*),Bash(gh:*),Bash(mise:*),Bash(make:*),Bash(npm:*),Bash(pnpm:*),Bash(yarn:*),Bash(bun:*),Bash(uv:*),Bash(uvx:*),Bash(cargo:*),Bash(go:*),Bash(pytest:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,mcp__github_inline_comment__create_inline_comment,Agent,WebFetch(domain:*),WebSearch,Bash(cat:*),Bash(echo:*),Bash(tr:*),Bash(xargs:*),Bash(sed:*),Bash(find:*),Bash(rg:*),Bash(sd:*),Bash(git:*),Bash(cargo:*),Bash(mise:*),Bash(gh:*),Bash(* --help),Bash(* --version),ReadMcpResourceTool,SendMessage,Skill,ToolSearch,TaskList,TaskGet,TaskCreate,TaskStop,Grep,Glob,Read,Edit,Write"'
             if [ -n "${MODEL}" ]; then
               echo "--model ${MODEL}"
             fi
@@ -133,6 +134,9 @@ jobs:
           additional_permissions: |
             actions: read
             checks: read
+            contents: write
+            pull-requests: write
+            issues: write
           allowed_bots: >-
             knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
           plugin_marketplaces: |
