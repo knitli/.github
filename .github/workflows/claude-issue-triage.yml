@@ -100,11 +100,12 @@ jobs:
         id: args
         env:
           MODEL: ${{ inputs.model }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           {
             echo 'value<<CLAUDE_ARGS_EOF'
-            echo '--allowedTools "mcp__github_*,Bash(gh issue:*),Bash(gh label list:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh search:*),Agent(Explore),WebFetch(domain:*),Bash(gh run list:*),Bash(gh run view:*),Bash(* --help),Bash(* --version)"'
+            echo '--allowedTools "mcp__github_*,mcp__github_inline_comment__create_inline_comment,Agent(Explore),WebFetch(domain:*),Bash(gh:*),Bash(* --help),Bash(* --version),ReadMcpResourceTool(*),SendMessage(*),Skill(*),ToolSearch(*),TaskList(*),TaskGet(*),TaskCreate(*),TaskStop(*),Grep(*),Glob(*),Read(*)"'
             if [ -n "${MODEL}" ]; then
               echo "--model ${MODEL}"
             fi
