@@ -69,6 +69,7 @@ concurrency:
 
 jobs:
   docs:
+    timeout-minutes: 60
     # On-demand only: a comment mentioning the docs alias on an issue or a PR
     # (including a diff-line review comment).
     runs-on: ubuntu-latest
