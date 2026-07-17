@@ -64,6 +64,7 @@ concurrency:
 
 jobs:
   security-review:
+    timeout-minutes: 45
     # Auto-review on PR events; on-demand review when a comment mentions the
     # security alias on a PR (issue_comment) or on a diff line (review comment).
     runs-on: ubuntu-latest
