@@ -65,6 +65,7 @@ concurrency:
 
 jobs:
   fix:
+    timeout-minutes: 90
     # On-demand only: a comment mentioning the fix alias on an issue or a PR
     # (including a diff-line review comment).
     runs-on: ubuntu-latest
