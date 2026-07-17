@@ -72,6 +72,7 @@ concurrency:
 
 jobs:
   review:
+    timeout-minutes: 70
     # Auto-review on PR events; on-demand review when a comment mentions the
     # review alias on a PR (issue_comment) or on a diff line (review comment).
     if: >-
