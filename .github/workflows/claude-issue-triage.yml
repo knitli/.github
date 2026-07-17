@@ -64,6 +64,7 @@ concurrency:
 
 jobs:
   triage:
+    timeout-minutes: 30
     # Auto-triage on new/reopened issues; on-demand triage when a comment on an
     # issue (not a PR) mentions the triage alias.
     if: >-
