@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Caller workflow for the "teaparty" British -> American spelling fixer.
+#
+# Copy this file into a target repository at:
+#   .github/workflows/teaparty.yml
+#
+# The dictionary and replacement logic live in knitli/.github; this caller
+# just wires up the trigger. Runs on every push to an open PR, so a fix lands
+# before `typos` (or any other spelling-gated check) ever sees the branch.
+#
+# Secrets are optional: without KNITLI_AGENT_CLIENT_ID/KNITLI_AGENT_PRIVATE_KEY
+# the commit is pushed with the default GITHUB_TOKEN and shows up as
+# `github-actions[bot]` instead of `knitli-agent[bot]`.
+
+name: Teaparty
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  teaparty:
+    permissions:
+      contents: write
+    uses: knitli/.github/.github/workflows/teaparty.yml@main
+    secrets: inherit
+    # Optional overrides:
+    # with:
+    #   dry_run: true

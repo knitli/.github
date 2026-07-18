@@ -300,6 +300,65 @@ A ready-to-copy caller lives at [`examples/claude-fix.yml`](../../examples/claud
 
 ---
 
+### teaparty.yml
+
+A deterministic (non-Claude) find-and-replace bot: scans a PR's changed files
+and rewrites British spellings to their American equivalents (`colour` ->
+`color`, `initialise` -> `initialize`, `travelled` -> `traveled`, ...), then
+commits the fix straight back to the branch. It exists because AI coding
+assistants habitually leak British spellings into Rust code, which then trips
+`typos` in every repo that gates CI on it — teaparty fixes that before the
+gate ever sees it.
+
+**Usage in your repository**:
+
+```yaml
+# .github/workflows/teaparty.yml
+name: Teaparty
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  teaparty:
+    permissions:
+      contents: write
+    uses: knitli/.github/.github/workflows/teaparty.yml@main
+    secrets: inherit
+```
+
+A ready-to-copy caller lives at [`examples/teaparty.yml`](../../examples/teaparty.yml).
+
+**Inputs**:
+- `dry_run` (optional): report what would change without committing (default: `false`)
+
+**Secrets** (both optional):
+- `KNITLI_AGENT_CLIENT_ID` / `KNITLI_AGENT_PRIVATE_KEY`: if provided, the fix
+  commit is pushed as `knitli-agent[bot]`; otherwise it falls back to the
+  default `GITHUB_TOKEN` and shows up as `github-actions[bot]`
+
+**How it works**:
+1. Diffs the PR's changed files (three-dot, against the merge base) and keeps
+   only common text/code file types — no lockfiles, no vendored/build
+   directories, no binaries.
+2. Runs `scripts/teaparty/replace.py` against that file list, using the
+   curated dictionary at `scripts/teaparty/dictionary.yml` (checked out from
+   this repo). Case is preserved (`Colour`/`COLOUR`/`backgroundColour` all
+   resolve correctly), and the dictionary intentionally leaves out ambiguous
+   words (see the exclusion notes at the top of the file) to avoid the false
+   positives it's designed to prevent.
+3. If anything changed, commits and pushes straight to the PR branch. No
+   changes found -> no commit -> nothing happens, so it's naturally
+   idempotent and safe to run on every push.
+
+**Note**: this is not a Claude persona — there's no model call and no prompt.
+It's a small, fully deterministic spelling fix, nothing else. It also refuses
+to push directly to a repository's default branch even if a caller wires it
+to a `push` trigger.
+
+---
+
 ## One-time setup for `knitli-agent` (org admin)
 
 All three personas above share one GitHub App and one set of org secrets:

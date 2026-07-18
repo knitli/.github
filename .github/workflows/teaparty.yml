@@ -1,0 +1,205 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable "teaparty" workflow for all Knitli repos.
+#
+# Scans the caller's changed files (common text/code types only) and rewrites
+# British spellings to their American equivalents against a curated
+# dictionary (scripts/teaparty/dictionary.yml, checked out from this repo),
+# then commits the fix straight back to the branch. This exists because
+# AI coding assistants habitually leak British spellings (colour, initialise,
+# behaviour, ...) into Rust code, which then trips `typos` in every repo that
+# gates CI on it — teaparty fixes that before the gate ever sees it.
+#
+# Deliberately NOT a Claude persona: this is a small, fully deterministic
+# find-and-replace, so there's no model call, no prompt, and no ambiguity to
+# reason about. It only ever touches spelling, never semantics.
+#
+# Safe by construction:
+#   - Only files this run's own diff touched are scanned (never the whole tree).
+#   - Only a fixed allowlist of text/code extensions is scanned.
+#   - The dictionary preserves case (colour/Colour/COLOUR/backgroundColour)
+#     and is intentionally conservative about ambiguous words (see the
+#     exclusion notes at the top of dictionary.yml) — see scripts/teaparty/replace.py.
+#   - No changes -> no commit -> no-op push, so this is naturally idempotent
+#     and safe to run on every push to a PR branch.
+#
+# See examples/teaparty.yml for a ready-to-copy caller workflow.
+
+name: Teaparty
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: 'Report what would change without committing'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      KNITLI_AGENT_CLIENT_ID:
+        description: 'Client ID for the knitli-agent GitHub App (optional; falls back to GITHUB_TOKEN)'
+        required: false
+      KNITLI_AGENT_PRIVATE_KEY:
+        description: 'Private key (.pem) for the knitli-agent GitHub App (optional; falls back to GITHUB_TOKEN)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: teaparty-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  teaparty:
+    # Skip draft PRs. No other gating needed: when a run finds nothing left
+    # to fix it makes no commit, so the extra run a bot-authored push
+    # triggers is naturally a fast no-op rather than a loop.
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # `secrets` isn't a valid context in a step `if:`, so check presence
+      # here (inside `run:`, where the secrets context is always available)
+      # and gate the next step on this step's output instead.
+      - name: Check for app credentials
+        id: has-app-creds
+        env:
+          CLIENT_ID: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+        run: echo "value=${{ env.CLIENT_ID != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint down-scoped app token
+        id: app-token
+        if: steps.has-app-creds.outputs.value == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
+        with:
+          client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout caller repo
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Checkout teaparty dictionary + script
+        uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
+        with:
+          repository: knitli/.github
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          path: .teaparty-src
+          sparse-checkout: |
+            scripts/teaparty
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install --quiet --disable-pip-version-check pyyaml
+
+      - name: Determine changed files
+        id: changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+            # First push to a branch (or a force-push) reports an all-zero SHA;
+            # fall back to just the tip commit in that case.
+            if [[ "$BASE_SHA" =~ ^0+$ ]]; then
+              BASE_SHA="${HEAD_SHA}~1"
+            fi
+          else
+            BASE_SHA="HEAD~1"
+            HEAD_SHA="HEAD"
+          fi
+
+          # Three-dot diff (against the merge base) so a PR only shows its own
+          # changes, not unrelated commits the base branch picked up meanwhile.
+          git diff --no-renames --diff-filter=ACMR --name-only "${BASE_SHA}...${HEAD_SHA}" \
+            > all_changed_files.txt || true
+
+          # Common text/code file types only; skip lockfiles and vendored/build dirs.
+          EXT_PATTERN='\.(rs|py|pyi|js|jsx|mjs|cjs|ts|tsx|go|java|kt|kts|c|h|cc|cpp|cxx|hpp|hh|cs|rb|php|swift|scala|sh|bash|zsh|ps1|md|mdx|rst|txt|yaml|yml|toml|json|jsonc|html|htm|css|scss|sass|less|sql|proto|graphql|vue|svelte|lua|r|jl|ex|exs|erl|hs|clj|cljs|dart|gradle|cfg|ini|conf|tf|tfvars|xml)$'
+          NAME_PATTERN='(^|/)(Makefile|Dockerfile|Justfile)$'
+          EXCLUDE_PATTERN='(^|/)(node_modules|vendor|target|dist|build|\.git)/|(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|uv\.lock)$'
+
+          grep -Ei "${EXT_PATTERN}" all_changed_files.txt > filtered.txt || true
+          grep -E "${NAME_PATTERN}" all_changed_files.txt >> filtered.txt || true
+          grep -Ev "${EXCLUDE_PATTERN}" filtered.txt | sort -u > changed_files.txt || true
+
+          # Binary files show as "-" in --numstat; drop any that slipped through.
+          : > candidate_files.txt
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            if git diff --numstat "${BASE_SHA}...${HEAD_SHA}" -- "$f" | grep -q '^-\t-\t'; then
+              continue
+            fi
+            echo "$f" >> candidate_files.txt
+          done < changed_files.txt
+
+          count=$(wc -l < candidate_files.txt | tr -d ' ')
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Scanning ${count} changed file(s):"
+          cat candidate_files.txt || true
+
+      - name: Run teaparty replace
+        id: replace
+        if: steps.changed.outputs.count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --dictionary .teaparty-src/scripts/teaparty/dictionary.yml
+            --files-from candidate_files.txt
+            --changed-files-out touched_files.txt
+          )
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python3 .teaparty-src/scripts/teaparty/replace.py "${ARGS[@]}"
+
+          if [ -s touched_files.txt ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push
+        # Never push straight to the default branch, even if a caller wires
+        # this workflow to a `push` trigger that includes it.
+        if: >-
+          steps.replace.outputs.changed == 'true' &&
+          inputs.dry_run != true &&
+          github.ref_name != github.event.repository.default_branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'knitli-agent[bot]'
+          git config user.email '142185322+knitli-agent[bot]@users.noreply.github.com'
+          git add -A --pathspec-from-file=touched_files.txt
+          git commit \
+            -m "chore(teaparty): fix British spellings" \
+            -m "Automated pass by the teaparty workflow: rewrites British spellings to their American equivalents in this branch's changed files, using the dictionary at knitli/.github scripts/teaparty/dictionary.yml." \
+            -m "[teaparty]"
+          git push origin HEAD:"${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+
+      - name: Clean up dictionary checkout
+        if: always()
+        run: rm -rf .teaparty-src
