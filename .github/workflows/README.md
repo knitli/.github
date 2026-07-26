@@ -404,6 +404,82 @@ to a `push` trigger.
 
 ---
 
+## Agent input gating
+
+Every `claude-*` workflow above starts with a `sanitize` job that the agent job
+declares `needs:` on. It scans the comments on the triggering issue or PR for
+ANSI/Unicode **echoback attack vectors** and, on finding one, fails — which
+skips the agent job. A red check explains why.
+
+### Why it blocks instead of sanitizing
+
+The obvious design is to strip the threat out of the comment and let the agent
+read the cleaned text. **That does not work**, and it is worth understanding why
+before anyone tries to "improve" this into a filter.
+
+`claude-code-action` deliberately reads the most attacker-controllable inputs
+from the **immutable webhook payload**, not from the API:
+
+| Agent input | Source | Effect of a post-trigger edit |
+| --- | --- | --- |
+| Trigger comment (`@knitli-review …`) | `create-prompt`: `context.payload.comment.body` | **None** — payload snapshot |
+| Issue / PR body | `extractOriginalBody()` reads `payload.issue.body` | **None** — payload snapshot |
+| Earlier thread comments | live GraphQL fetch | comment is **dropped** from context by `filterCommentsToTriggerTime()` |
+
+Those functions exist specifically to defeat TOCTOU attacks — the upstream
+comment says `extractOriginalBody` prevents "TOCTOU attacks where an attacker
+edits the body after the trigger but before the action reads it." A sanitizer
+edits a comment after the trigger, so from upstream's perspective it is
+indistinguishable from the attacker that defense was built to stop, and its
+edits are discarded or cause the comment to be filtered out entirely.
+
+A gate does not have this problem: it is a **precondition**, not a mutation, so
+it does not matter whether the agent later reads the payload or the API. It also
+composes with upstream's TOCTOU defense instead of fighting it.
+
+### False positives are narrow
+
+The gate fails only on exit code `77` from `distill-strip-ansi` — a genuine
+echoback vector. Content that merely *contains* escape sequences (a pasted
+terminal capture with colour codes) is reported as `stripped`, not `threat`, and
+does **not** block the agent. The `sanitize` preset is used rather than `dumb`
+for the same reason.
+
+### Known gaps — read before trusting this
+
+The gate scans **comments only**. It does not scan:
+
+- the **issue body** or **PR body**, which is the entire untrusted input for an
+  auto-triage on `issues: [opened]` or an auto-review on `pull_request:
+  [opened]`;
+- the PR **title**;
+- **file and diff content**, which a PR reviewer reads directly.
+
+Closing the body/title gap needs a change in
+[`marquetools/strip-ansi-action`](https://github.com/marquetools/strip-ansi-action)
+(it currently fetches `/issues/{n}/comments` and `/pulls/{n}/comments` and
+nothing else). Until then, the gate narrows the comment vector and leaves the
+body vector open. Don't describe it as full coverage.
+
+### Permissions callers must grant
+
+Reading a **PR's** conversation comments requires `pull-requests`, even though
+the endpoint is `/issues/{n}/comments`; reading a real **issue's** comments
+requires `issues`. Granting only one of them and triggering the other context
+403s, and because the gate is fail-closed a 403 **blocks the agent**.
+
+So a caller job must grant the read scopes for whichever contexts it triggers
+on. Each `sanitize` job declares only the scopes its workflow actually reaches,
+and the `examples/` callers are already correct. If you add an `issues:` trigger
+to a caller that previously only fired on PRs, add `issues: read` alongside it.
+
+This is not hypothetical: `knitli/marque-dev` ran a comment scanner with
+`issues: write` but no `pull-requests` scope for 27 consecutive runs, and all 27
+failed 403 on a PR thread without anyone noticing, because the file-scanning
+half of the same workflow was green.
+
+---
+
 ## One-time setup for `knitli-agent` (org admin)
 
 All three personas above share one GitHub App and one set of org secrets:

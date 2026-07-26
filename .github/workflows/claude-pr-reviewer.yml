@@ -71,7 +71,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail-closed gate: refuses to start the agent when the triggering thread
+  # carries an ANSI/Unicode echoback attack vector. It BLOCKS rather than
+  # sanitizes, because claude-code-action reads the trigger comment and the
+  # issue/PR body from the immutable webhook payload as its own TOCTOU defense,
+  # so a post-trigger edit cannot change what the model sees. See the README,
+  # "Agent input gating", for the full reasoning and the known gaps.
+  sanitize:
+    name: Scan agent inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Block on ANSI/Unicode echoback vectors
+        uses: marquetools/.github/actions/strip-ansi@ac95bf1833ed2736dfb37d2674a59abc484c4fa4
+        with:
+          github-token: ${{ github.token }}
+          clean-pr-comments: ${{ github.event.pull_request != null || github.event.issue.pull_request != null }}
+          # This workflow only ever acts on pull requests, so it holds no
+          # `issues` scope and must not reach for the issue endpoint.
+          clean-issue-comments: false
+          on-threat: fail
+          preset: sanitize
+
   review:
+    needs: sanitize
     timeout-minutes: 70
     # Auto-review on PR events; on-demand review when a comment mentions the
     # review alias on a PR (issue_comment) or on a diff line (review comment).

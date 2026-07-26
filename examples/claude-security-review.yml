@@ -36,6 +36,14 @@ jobs:
       actions: read
       checks: read
       security-events: read
+      # Needed by the reusable workflow's fail-closed `sanitize` gate, which
+      # scans the triggering thread before the agent starts. `issue_comment`
+      # fires on plain issues as well as on PRs, and reading an issue's
+      # comments requires `issues` — reading a *PR's* comments requires
+      # `pull-requests`, even though both go through the /issues/ endpoint.
+      # Without this the gate 403s and blocks the agent. See the README,
+      # "Agent input gating".
+      issues: read
     uses: knitli/.github/.github/workflows/claude-security-review.yml@main
     secrets: inherit
     # Optional overrides:
