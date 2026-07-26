@@ -34,13 +34,24 @@ jobs:
       contents: write
     uses: knitli/.github/.github/workflows/teaparty.yml@main
     secrets: inherit
-    # Optional overrides:
-    # with:
+    with:
+      # Newline-separated ERE fragments, ADDED to the built-in exclusions
+      # (never replacing them). Blank lines and `#` comments are ignored; an
+      # invalid pattern fails the run rather than silently scanning nothing.
+      exclude_paths: |
+        # This file. It names the spellings teaparty fixes, so a run rewrites
+        # its own examples into nonsense. Keep this entry.
+        ^\.github/workflows/teaparty\.yml$
+
+        # Your repo's byte-sensitive paths go here: anything whose exact bytes
+        # are load-bearing and must not be rewritten even when the spelling
+        # really is British. Vendored upstream sources, frozen legal/filing
+        # snapshots, golden fixtures, deliberate-misspelling corpora. Your
+        # spell-check config (`_typos.toml`'s `extend-exclude`) is usually the
+        # right starting list. See the README's "Byte-sensitive paths".
+        #
+        # ^docs/vendored/
+        # ^tests/.*\.golden\.json$
+
+    # Other optional overrides:
     #   dry_run: true
-    #
-    #   # Newline-separated ERE fragments, ADDED to the built-in exclusions.
-    #   # Blank lines and `#` comments are ignored; an invalid pattern fails
-    #   # the run rather than silently scanning nothing.
-    #   exclude_paths: |
-    #     ^docs/vendored/
-    #     ^tests/.*\.golden\.json$
