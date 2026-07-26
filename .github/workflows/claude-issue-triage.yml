@@ -77,7 +77,7 @@ jobs:
       issues: read
     steps:
       - name: Block on ANSI/Unicode echoback vectors
-        uses: marquetools/.github/actions/strip-ansi@ac95bf1833ed2736dfb37d2674a59abc484c4fa4
+        uses: knitli/strip-ansi-action@df9a3353409b87964f29dae0139ad3baa6522f0a
         with:
           github-token: ${{ github.token }}
           # This workflow only ever acts on real issues (its `if:` requires

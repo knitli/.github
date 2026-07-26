@@ -508,10 +508,10 @@ The gate does **not** scan:
   whole-repository scanning is not practical on an interactive path.
 
 Closing the body/title gap needs a change in
-[`marquetools/strip-ansi-action`](https://github.com/marquetools/strip-ansi-action)
-(it fetches `/issues/{n}/comments` and `/pulls/{n}/comments` and nothing else).
-Until then the gate covers comments and the diff, and leaves the body vector
-open. Don't describe it as full coverage.
+[`knitli/strip-ansi-action`](https://github.com/knitli/strip-ansi-action)
+(it currently fetches `/issues/{n}/comments` and `/pulls/{n}/comments` and
+nothing else). Until then, the gate narrows the comment vector and leaves the
+body vector open. Don't describe it as full coverage.
 
 ### Permissions callers must grant
 
