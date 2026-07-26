@@ -432,9 +432,15 @@ to a `push` trigger.
 ## Agent input gating
 
 Every `claude-*` workflow above starts with a `sanitize` job that the agent job
-declares `needs:` on. It scans the comments on the triggering issue or PR for
-ANSI/Unicode **echoback attack vectors** and, on finding one, fails — which
-skips the agent job. A red check explains why.
+declares `needs:` on. It scans the untrusted text that reaches the agent for
+ANSI/Unicode **echoback attack vectors** and, on finding one, fails — which skips
+the agent job. A red check explains why.
+
+Two surfaces are scanned:
+
+- **Comments** on the triggering issue or PR (conversation and review comments).
+- **The pull request diff**, for the four workflows that can be invoked on a PR.
+  `claude-issue-triage` acts only on real issues, so it has no diff to scan.
 
 ### Why it blocks instead of sanitizing
 
@@ -470,15 +476,36 @@ terminal capture with colour codes) is reported as `stripped`, not `threat`, and
 does **not** block the agent. The `sanitize` preset is used rather than `dumb`
 for the same reason.
 
+### Why the diff is fetched rather than checked out
+
+`gh pr diff` returns exactly the bytes the agent itself reads when it runs
+`gh pr diff`, so the gate scans the artifact the agent actually consumes rather
+than an approximation of it. Two consequences worth keeping:
+
+- **No binary filter to get wrong.** Git's diff format renders a changed binary
+  as `Binary files a/x and b/y differ`, never its content. Verified against
+  knitli/marque-dev#1656: 48 changed binaries, **zero** escape bytes in the diff.
+  A "scan the changed files on disk" design has to classify binary itself, and
+  that is easy to botch — a naive NUL-byte-in-first-8-KiB filter let **all 110**
+  of that repo's escape-bearing PDFs, fonts and images straight through, any one
+  of which would have tripped a fail-closed gate and blocked review.
+- **No checkout at all.** The gate needs no `contents` scope and never places
+  untrusted code on the runner.
+
+A diff too large for the API makes the step exit non-zero, which fails the gate
+closed rather than scanning a truncated diff.
+
 ### Known gaps — read before trusting this
 
-The gate scans **comments only**. It does not scan:
+The gate does **not** scan:
 
-- the **issue body** or **PR body**, which is the entire untrusted input for an
+- the **issue body** or **PR body** — the entire untrusted input for an
   auto-triage on `issues: [opened]` or an auto-review on `pull_request:
   [opened]`;
 - the PR **title**;
-- **file and diff content**, which a PR reviewer reads directly.
+- **file content outside the diff.** The agents hold `Read`, `Grep` and `Glob`,
+  so an agent can read a file the PR never touched. Only the diff is gated;
+  whole-repository scanning is not practical on an interactive path.
 
 Closing the body/title gap needs a change in
 [`knitli/strip-ansi-action`](https://github.com/knitli/strip-ansi-action)
