@@ -85,10 +85,39 @@ jobs:
       pull-requests: read
       issues: read
     steps:
+      # The diff is fetched, not checked out. `gh pr diff` returns exactly the
+      # bytes the agent itself reads via `gh pr diff`, and git's diff format
+      # renders binary files as "Binary files ... differ" rather than their
+      # content — so there is no binary filter to get wrong and no checkout at
+      # all. (Verified against knitli/marque-dev#1656: 48 changed binaries,
+      # zero escape bytes in the diff. A naive NUL-byte filter over files on
+      # disk let all 110 of that repo's escape-bearing binaries through.)
+      #
+      # A diff too large for the API makes this step exit non-zero, which fails
+      # the gate closed rather than scanning a truncated diff.
+      - name: Capture the pull request diff
+        id: diff
+        if: ${{ github.event.pull_request != null || github.event.issue.pull_request != null }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/agent-inputs"
+          mkdir -p "${dest}"
+          out="${dest}/pr-${PR_NUMBER}.diff"
+          gh pr diff "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" >"${out}"
+          echo "path=${out}" >>"${GITHUB_OUTPUT}"
+          echo "Gating $(wc -c <"${out}") bytes of diff for PR #${PR_NUMBER}."
+
       - name: Block on ANSI/Unicode echoback vectors
         uses: marquetools/.github/actions/strip-ansi@ac95bf1833ed2736dfb37d2674a59abc484c4fa4
         with:
           github-token: ${{ github.token }}
+          # Empty when the diff step was skipped (no PR in context), which makes
+          # the action skip file processing and scan comments only.
+          files: ${{ steps.diff.outputs.path }}
           clean-pr-comments: ${{ github.event.pull_request != null || github.event.issue.pull_request != null }}
           clean-issue-comments: ${{ github.event.issue != null && github.event.issue.pull_request == null }}
           on-threat: fail
