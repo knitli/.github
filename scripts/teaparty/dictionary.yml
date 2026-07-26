@@ -33,6 +33,18 @@
 #     verb; "leapt" is accepted in American English as well)
 #   - storey: floor-of-a-building sense is unambiguous, but the word is rare
 #     enough in code/docs that it wasn't worth the entry; add if it shows up
+#   - cancelled/cancelling: BOTH spellings are standard American English
+#     ("canceled" is merely the more common US form), and -- decisively --
+#     "cancelled" is the settled spelling in the API surface of every runtime
+#     teaparty runs against: Rust/Tokio (`JoinError::is_cancelled`,
+#     `CancellationToken`), .NET (`CancellationToken`, `OperationCanceledException`
+#     mixes both), and the DOM (`Event.cancelable`, but `AbortSignal` docs use
+#     "cancelled"). Renaming those is not a spelling fix, it is a compile
+#     error. Note this is a general hazard, not one entry's problem: teaparty
+#     only edits the files in a diff, so renaming ANY identifier breaks the
+#     references to it that live in files the diff didn't touch. Entries are
+#     kept out when a word is plausibly an identifier rather than prose.
+#   - cancellation: unchanged in American English either way; nothing to fix.
 
 # -our -> -or
 colour: color
@@ -476,8 +488,6 @@ travelled: traveled
 travelling: traveling
 traveller: traveler
 travellers: travelers
-cancelled: canceled
-cancelling: canceling
 modelled: modeled
 modelling: modeling
 modeller: modeler

@@ -383,6 +383,20 @@ A good starting point is the repo's existing spell-check exclusions
 substantially the same reason. Keeping the two in sync is the intended
 practice; `marque-dev`'s caller is the worked example.
 
+#### Identifiers vs. prose
+
+Teaparty edits only the files in a diff, so **renaming an identifier breaks the
+references to it that live in files the diff didn't touch** — and it cannot tell
+an identifier from prose. The dictionary is therefore curated to leave out words
+that are plausibly identifiers: `cancelled` is excluded because
+`JoinError::is_cancelled` (Tokio) and `CancellationToken` (.NET) are API
+surface, so rewriting them is a compile error rather than a spelling fix.
+
+If you hit a word in this category, the fix is to drop it from the dictionary
+with a note in the exclusion list at the top of `dictionary.yml` — not to add
+the affected file to `exclude_paths`. A path exclusion goes stale the moment a
+new file uses the same identifier.
+
 **Note**: this is not a Claude persona — there's no model call and no prompt.
 It's a small, fully deterministic spelling fix, nothing else. It also refuses
 to push directly to a repository's default branch even if a caller wires it
