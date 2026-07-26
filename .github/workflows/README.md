@@ -397,6 +397,31 @@ with a note in the exclusion list at the top of `dictionary.yml` — not to add
 the affected file to `exclude_paths`. A path exclusion goes stale the moment a
 new file uses the same identifier.
 
+#### Self-reference
+
+Any file that *documents* the fixer names the spellings it fixes, which means
+teaparty rewrites it into nonsense. The caller workflow is the common case —
+its header comment lists example British spellings, and a run turns that into
+"British spellings (`color`, `initialize`, `behavior`)", which no longer says
+anything. `examples/teaparty.yml` therefore ships with itself already in
+`exclude_paths`; **keep that entry when you copy it.**
+
+The same applies to this repository. There is deliberately **no teaparty caller
+in `knitli/.github`** — only the reusable workflow — and adding one without
+excluding `scripts/teaparty/` would be self-destructive rather than merely
+untidy: a run rewrites every key in `dictionary.yml` into an identity mapping
+(`colour: color` -> `color: color`, 564 of them). That result is still valid
+YAML and still runs, so teaparty would silently stop fixing anything rather
+than fail. If a caller is ever added here, it must exclude at minimum:
+
+```yaml
+exclude_paths: |
+  ^scripts/teaparty/
+  ^\.github/workflows/teaparty\.yml$
+  ^\.github/workflows/README\.md$
+  ^examples/teaparty\.yml$
+```
+
 **Note**: this is not a Claude persona — there's no model call and no prompt.
 It's a small, fully deterministic spelling fix, nothing else. It also refuses
 to push directly to a repository's default branch even if a caller wires it
