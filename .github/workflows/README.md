@@ -481,7 +481,7 @@ The gate scans **comments only**. It does not scan:
 - **file and diff content**, which a PR reviewer reads directly.
 
 Closing the body/title gap needs a change in
-[`marquetools/strip-ansi-action`](https://github.com/marquetools/strip-ansi-action)
+[`knitli/strip-ansi-action`](https://github.com/knitli/strip-ansi-action)
 (it currently fetches `/issues/{n}/comments` and `/pulls/{n}/comments` and
 nothing else). Until then, the gate narrows the comment vector and leaves the
 body vector open. Don't describe it as full coverage.

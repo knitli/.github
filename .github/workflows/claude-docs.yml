@@ -86,7 +86,7 @@ jobs:
       issues: read
     steps:
       - name: Block on ANSI/Unicode echoback vectors
-        uses: marquetools/.github/actions/strip-ansi@ac95bf1833ed2736dfb37d2674a59abc484c4fa4
+        uses: knitli/.github/actions/strip-ansi@df9a3353409b87964f29dae0139ad3baa6522f0a
         with:
           github-token: ${{ github.token }}
           clean-pr-comments: ${{ github.event.pull_request != null || github.event.issue.pull_request != null }}
