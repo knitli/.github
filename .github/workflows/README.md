@@ -499,19 +499,35 @@ closed rather than scanning a truncated diff.
 
 The gate does **not** scan:
 
-- the **issue body** or **PR body** — the entire untrusted input for an
-  auto-triage on `issues: [opened]` or an auto-review on `pull_request:
-  [opened]`;
-- the PR **title**;
 - **file content outside the diff.** The agents hold `Read`, `Grep` and `Glob`,
   so an agent can read a file the PR never touched. Only the diff is gated;
   whole-repository scanning is not practical on an interactive path.
 
-Closing the body/title gap needs a change in
-[`knitli/strip-ansi-action`](https://github.com/knitli/strip-ansi-action)
-(it currently fetches `/issues/{n}/comments` and `/pulls/{n}/comments` and
-nothing else). Until then, the gate narrows the comment vector and leaves the
-body vector open. Don't describe it as full coverage.
+That is the whole list. It is a real limit rather than an oversight, so don't
+describe the gate as total coverage either.
+
+The **issue/PR body and title** gap this section used to describe is closed
+([`knitli/strip-ansi-action#8`](https://github.com/knitli/strip-ansi-action/pull/8),
+via `scan-event-payload`). How it is closed matters more than that it is:
+
+Those fields are read from the **immutable webhook payload**, not re-fetched from
+the API. The payload is a snapshot taken when the workflow triggered and cannot be
+edited afterwards; a live fetch has no such property, and that difference is
+exploitable — trigger on hostile text, then edit it clean, and a re-fetching scan
+sees the sanitised version and passes while the agent reads the hostile original
+out of the payload. Since `claude-code-action` deliberately reads the trigger
+comment and the issue/PR body from the payload as its own TOCTOU defence, a gate
+that re-fetches is not gating the same text the model reads.
+
+Which means the payload scan also closed a fail-open in the **comment** surface
+this README previously described as sound: the triggering comment is now covered by
+the snapshot, not only by a live fetch that a post-trigger edit can launder. The
+comment inputs stay switched on regardless, because the payload carries only the
+*triggering* comment — earlier thread comments, which the agent also reads, still
+come from the API.
+
+The payload scan needs no token and no `permissions:` grant; it reads a file the
+runner already has.
 
 ### Permissions callers must grant
 

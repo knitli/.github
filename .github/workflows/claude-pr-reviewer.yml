@@ -111,7 +111,7 @@ jobs:
           echo "Gating $(wc -c <"${out}") bytes of diff for PR #${PR_NUMBER}."
 
       - name: Block on ANSI/Unicode echoback vectors
-        uses: knitli/strip-ansi-action@df9a3353409b87964f29dae0139ad3baa6522f0a
+        uses: knitli/strip-ansi-action@8ba0fe0a82dbeab3b5d8702e77bfbbdbbbf56e72
         with:
           github-token: ${{ github.token }}
           # Empty when the diff step was skipped (no PR in context), which makes
@@ -121,6 +121,13 @@ jobs:
           # This workflow only ever acts on pull requests, so it holds no
           # `issues` scope and must not reach for the issue endpoint.
           clean-issue-comments: false
+          # The issue/PR title and body, the triggering comment body, and a review
+          # body — read from the immutable webhook payload rather than re-fetched.
+          # That is the same snapshot claude-code-action reads, so it is the only
+          # form of this scan a post-trigger edit cannot slip past. Needs no token
+          # and no scope. The comment inputs above stay: the payload carries the
+          # triggering comment, not the earlier thread comments the agent also reads.
+          scan-event-payload: true
           on-threat: fail
           preset: sanitize
 
