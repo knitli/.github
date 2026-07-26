@@ -15,6 +15,12 @@
 # Secrets are optional: without KNITLI_AGENT_CLIENT_ID/KNITLI_AGENT_PRIVATE_KEY
 # the commit is pushed with the default GITHUB_TOKEN and shows up as
 # `github-actions[bot]` instead of `knitli-agent[bot]`.
+#
+# BEFORE ENABLING: teaparty rewrites bytes in place, so list any path whose
+# exact bytes are load-bearing under `exclude_paths` (see below) — vendored
+# upstream specs, frozen filing snapshots, golden fixtures, deliberate-typo
+# corpora. The repo's own spell-check exclusions (`_typos.toml`) are usually
+# the right starting list. The workflow cannot infer these for you.
 
 name: Teaparty
 
@@ -31,3 +37,10 @@ jobs:
     # Optional overrides:
     # with:
     #   dry_run: true
+    #
+    #   # Newline-separated ERE fragments, ADDED to the built-in exclusions.
+    #   # Blank lines and `#` comments are ignored; an invalid pattern fails
+    #   # the run rather than silently scanning nothing.
+    #   exclude_paths: |
+    #     ^docs/vendored/
+    #     ^tests/.*\.golden\.json$

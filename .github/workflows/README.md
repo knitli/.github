@@ -332,6 +332,11 @@ A ready-to-copy caller lives at [`examples/teaparty.yml`](../../examples/teapart
 
 **Inputs**:
 - `dry_run` (optional): report what would change without committing (default: `false`)
+- `exclude_paths` (optional): newline-separated extended-regex (ERE) fragments;
+  a changed file whose path matches any of them is skipped. **Added** to the
+  built-in exclusions, never replaces them. Blank lines and `#` comments are
+  ignored; an invalid pattern fails the run rather than silently scanning
+  nothing. See [Byte-sensitive paths](#byte-sensitive-paths) below.
 
 **Secrets** (both optional):
 - `KNITLI_AGENT_CLIENT_ID` / `KNITLI_AGENT_PRIVATE_KEY`: if provided, the fix
@@ -351,6 +356,32 @@ A ready-to-copy caller lives at [`examples/teaparty.yml`](../../examples/teapart
 3. If anything changed, commits and pushes straight to the PR branch. No
    changes found -> no commit -> nothing happens, so it's naturally
    idempotent and safe to run on every push.
+
+#### Byte-sensitive paths
+
+Teaparty rewrites bytes in place, so before enabling it on a repo, work out
+which of that repo's files must **not** be rewritten even when the spelling
+genuinely is British, and list them in `exclude_paths`. The workflow has no way
+to infer these — the built-in exclusions only cover the universal cases
+(`node_modules/`, `vendor/`, `target/`, `dist/`, `build/`, lockfiles).
+
+Typical categories:
+
+- **Vendored upstream sources.** A specification or manual checked in as the
+  authoritative reference. Rewriting `amongst` -> `among` there is a silent
+  edit to a source of record, and it breaks any review that re-verifies a
+  quotation against the file's exact text.
+- **Frozen legal or filing snapshots.** Anything that must byte-match what was
+  submitted elsewhere (a filed patent provisional, a signed attestation).
+- **Golden / expected-output fixtures.** Rewriting an `.expected.json` makes a
+  test pass by moving the goalpost instead of fixing the code.
+- **Files with deliberate misspellings.** Typo-recovery tables, mangled-input
+  corpora, and docs whose examples are misspelled on purpose.
+
+A good starting point is the repo's existing spell-check exclusions
+(`_typos.toml`'s `extend-exclude`, `.codespellrc`, ...) — those lists exist for
+substantially the same reason. Keeping the two in sync is the intended
+practice; `marque-dev`'s caller is the worked example.
 
 **Note**: this is not a Claude persona — there's no model call and no prompt.
 It's a small, fully deterministic spelling fix, nothing else. It also refuses

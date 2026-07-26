@@ -17,6 +17,11 @@
 # non-letter, or a lower->upper case transition (so camelCase identifiers are
 # handled without also matching inside e.g. "discolouration" twice or
 # clobbering unrelated substrings).
+#
+# A match inside a long opaque token (base64 payload, hex digest, minified
+# bundle token, URL) is skipped -- see _in_opaque_run. The camelCase rule
+# above cannot distinguish `backgroundColour` from an accidental lower->upper
+# transition in encoded data, and rewriting a byte there corrupts the payload.
 
 from __future__ import annotations
 
@@ -65,6 +70,47 @@ def _is_end_boundary(text: str, idx: int) -> bool:
     return text[idx - 1].islower() and nxt.isupper()
 
 
+# Characters that make up a base64 payload. A hex digest, a minified bundle
+# token and a URL are all drawn from the same set, which is what makes it a
+# usable "this is opaque data, not prose" signal.
+_OPAQUE_CHARS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+)
+# A run must be at least this long before it's treated as opaque. Real
+# identifiers do get long (`defaultBackgroundColourForDarkTheme` is 35), so
+# this is set well clear of them; embedded base64 blobs are hundreds of
+# characters, so nothing real is lost at the top end.
+_OPAQUE_MIN_RUN = 48
+# ...and must also contain at least one of these. Requiring a digit or a
+# base64-only symbol is what keeps a long pure-alphabetic camelCase
+# identifier out of the opaque bucket.
+_OPAQUE_MARKERS = frozenset("0123456789+/=")
+
+
+def _in_opaque_run(text: str, start: int, end: int) -> bool:
+    """True when the match sits inside a long opaque token (base64, hex digest,
+    minified blob, URL) rather than in prose or an identifier.
+
+    The camelCase boundary rules above are necessary to catch
+    `backgroundColour`, but they can't tell that apart from an accidental
+    lower->upper transition inside binary data: in a base64 image payload,
+    `S2tYreJQscahFHoAK` presents `tYre` with a clean boundary on both sides and
+    silently becomes `S2tireJQscahFHoAK` (`tyre` -> `tire`). Rewriting a byte
+    inside an encoded payload corrupts it, so opaque runs are skipped
+    outright. Erring toward a missed fix rather than a corrupted file is the
+    intended trade-off.
+    """
+    lo = start
+    while lo > 0 and text[lo - 1] in _OPAQUE_CHARS:
+        lo -= 1
+    hi = end
+    while hi < len(text) and text[hi] in _OPAQUE_CHARS:
+        hi += 1
+    if hi - lo < _OPAQUE_MIN_RUN:
+        return False
+    return any(c in _OPAQUE_MARKERS for c in text[lo:hi])
+
+
 def match_case(source: str, replacement: str) -> str:
     if source.isupper() and len(source) > 1:
         return replacement.upper()
@@ -82,6 +128,8 @@ def replace_in_text(
     for m in pattern.finditer(text):
         start, end = m.start(), m.end()
         if not (_is_start_boundary(text, start) and _is_end_boundary(text, end)):
+            continue
+        if _in_opaque_run(text, start, end):
             continue
         word = m.group(0)
         replacement = match_case(word, mapping[word.lower()])

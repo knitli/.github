@@ -23,6 +23,13 @@
 #   - The dictionary preserves case (colour/Colour/COLOUR/backgroundColour)
 #     and is intentionally conservative about ambiguous words (see the
 #     exclusion notes at the top of dictionary.yml) — see scripts/teaparty/replace.py.
+#   - A match inside a long opaque token (base64 payload, hex digest, minified
+#     bundle token, URL) is skipped, so an accidental camelCase-looking
+#     boundary in encoded data can't corrupt it — see _in_opaque_run.
+#   - Callers pass `exclude_paths` for files whose exact bytes are
+#     load-bearing (vendored upstream sources, frozen filing snapshots, golden
+#     fixtures). The workflow cannot know a repo's byte-sensitive paths, so a
+#     repo that has any MUST declare them.
 #   - No changes -> no commit -> no-op push, so this is naturally idempotent
 #     and safe to run on every push to a PR branch.
 #
@@ -38,6 +45,29 @@ on:
         required: false
         type: boolean
         default: false
+      exclude_paths:
+        description: |
+          Newline-separated extended-regex (ERE) fragments. A changed file
+          whose path matches ANY of them is skipped. These are ADDED to the
+          built-in exclusions (node_modules/, vendor/, target/, dist/,
+          build/, lockfiles), never replace them. Blank lines and `#`
+          comments are ignored; patterns match anywhere in the path unless
+          anchored with `^`. An invalid pattern fails the run loudly rather
+          than silently scanning nothing.
+
+          Use this for paths whose exact bytes are load-bearing and must not
+          be rewritten even when the spelling really is British: vendored
+          upstream sources, frozen legal/filing snapshots, golden test
+          fixtures, and any file already excluded from the repo's spell-check
+          config (`_typos.toml`) for the same reason.
+
+          Example:
+            exclude_paths: |
+              ^docs/vendored/
+              ^tests/.*\.golden\.json$
+        required: false
+        type: string
+        default: ''
     secrets:
       KNITLI_AGENT_CLIENT_ID:
         description: 'Client ID for the knitli-agent GitHub App (optional; falls back to GITHUB_TOKEN)'
@@ -111,6 +141,11 @@ jobs:
       - name: Determine changed files
         id: changed
         shell: bash
+        # Passed through the environment rather than interpolated into the
+        # script body: `exclude_paths` is caller-controlled free text, and
+        # `${{ }}` substitution would splice it into the shell source.
+        env:
+          EXCLUDE_PATHS: ${{ inputs.exclude_paths }}
         run: |
           set -euo pipefail
 
@@ -139,6 +174,30 @@ jobs:
           EXT_PATTERN='\.(rs|py|pyi|js|jsx|mjs|cjs|ts|tsx|go|java|kt|kts|c|h|cc|cpp|cxx|hpp|hh|cs|rb|php|swift|scala|sh|bash|zsh|ps1|md|mdx|rst|txt|yaml|yml|toml|json|jsonc|html|htm|css|scss|sass|less|sql|proto|graphql|vue|svelte|lua|r|jl|ex|exs|erl|hs|clj|cljs|dart|gradle|cfg|ini|conf|tf|tfvars|xml)$'
           NAME_PATTERN='(^|/)(Makefile|Dockerfile|Justfile)$'
           EXCLUDE_PATTERN='(^|/)(node_modules|vendor|target|dist|build|\.git)/|(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|uv\.lock)$'
+
+          # Append the caller's own exclusions. Blank lines and `#` comments
+          # are dropped first: an empty fragment would make the alternation
+          # `...|` , which matches EVERY path and would silently turn the whole
+          # run into a no-op instead of erroring.
+          EXTRA="$(printf '%s\n' "${EXCLUDE_PATHS:-}" \
+            | sed 's/[[:space:]]*$//' \
+            | grep -Ev '^[[:space:]]*(#.*)?$' || true)"
+          if [ -n "${EXTRA}" ]; then
+            EXCLUDE_PATTERN="${EXCLUDE_PATTERN}|$(printf '%s' "${EXTRA}" | paste -sd '|' -)"
+          fi
+
+          # A malformed caller regex makes grep exit 2. Without this check the
+          # `|| true` guards below would swallow it, leaving an empty file list
+          # that looks exactly like "nothing to fix" -- fail loudly instead.
+          set +e
+          printf '' | grep -E "${EXCLUDE_PATTERN}" >/dev/null 2>&1
+          grep_rc=$?
+          set -e
+          if [ "${grep_rc}" -gt 1 ]; then
+            echo "::error::teaparty: exclude_paths produced an invalid regex: ${EXCLUDE_PATTERN}"
+            exit 1
+          fi
+          echo "Exclusion pattern: ${EXCLUDE_PATTERN}"
 
           grep -Ei "${EXT_PATTERN}" all_changed_files.txt > filtered.txt || true
           grep -E "${NAME_PATTERN}" all_changed_files.txt >> filtered.txt || true
