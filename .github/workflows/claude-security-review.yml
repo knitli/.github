@@ -107,7 +107,7 @@ jobs:
           echo "Gating $(wc -c <"${out}") bytes of diff for PR #${PR_NUMBER}."
 
       - name: Block on ANSI/Unicode echoback vectors
-        uses: knitli/strip-ansi-action@8ba0fe0a82dbeab3b5d8702e77bfbbdbbbf56e72
+        uses: knitli/strip-ansi-action@42512901e57e31b94c89cc04fea2c0fcd51d58cf
         with:
           github-token: ${{ github.token }}
           # Empty when the diff step was skipped (no PR in context), which makes
