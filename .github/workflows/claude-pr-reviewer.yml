@@ -83,6 +83,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       pull-requests: read
+      contents: read
     steps:
       # The diff is fetched, not checked out. `gh pr diff` returns exactly the
       # bytes the agent itself reads via `gh pr diff`, and git's diff format
