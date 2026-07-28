@@ -68,6 +68,11 @@ on:
         required: false
         type: string
         default: ''
+      actions:
+        description: 'If true, runs against actions/workflows.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       KNITLI_AGENT_CLIENT_ID:
         description: 'Client ID for the knitli-agent GitHub App (optional; falls back to GITHUB_TOKEN)'
@@ -93,6 +98,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      # we scope this down if it's not needed
+      actions:  write
     steps:
       # `secrets` isn't a valid context in a step `if:`, so check presence
       # here (inside `run:`, where the secrets context is always available)
@@ -113,6 +120,7 @@ jobs:
           client-id: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
           private-key: ${{ secrets.KNITLI_AGENT_PRIVATE_KEY }}
           permission-contents: write
+          permission-actions: ${{ case(inputs.actions == 'true', 'write', 'none') }}
 
       - name: Checkout caller repo
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
