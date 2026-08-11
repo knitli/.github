@@ -210,7 +210,7 @@ jobs:
             checks: read
             issues: read
           allowed_bots: >-
-            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot],google-labs-jules[bot]
           plugin_marketplaces: |
             https://github.com/anthropics/claude-plugins-official.git
           plugins: |
