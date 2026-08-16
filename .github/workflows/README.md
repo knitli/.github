@@ -91,10 +91,21 @@ A ready-to-copy caller lives at [`examples/claude-pr-reviewer.yml`](../../exampl
 - `KNITLI_AGENT_CLIENT_ID`: Client ID for the `knitli-agent` GitHub App
 - `KNITLI_AGENT_PRIVATE_KEY`: private key (`.pem`) for the `knitli-agent` GitHub App
 - `CLAUDE_CODE_OAUTH_TOKEN`: org subscription OAuth token for Claude Code
+- `ANTHROPIC_API_KEY` (optional): API credential preferred over subscription
+  OAuth when configured; useful when subscription OAuth is unavailable in CI
 
 **Triggers**:
 - Auto: `pull_request` (opened, synchronize, reopened, ready_for_review)
 - On-demand: a comment containing `@knitli-review` on a PR (issue comment) or on a diff line (review comment)
+
+Reviews are queued one at a time per caller repository (`queue: max`) so a
+stacked-PR submission cannot consume the provider quota in one burst. Before
+starting the agent, the workflow skips superseded queued events and performs a
+one-token Anthropic availability probe. The probe logs only the credential type,
+HTTP status, and allowlisted rate-limit headers; it never logs the credential or
+response body. This keeps authentication failures (`401`) distinguishable from
+quota exhaustion (`429`) without enabling the action's sensitive full-output
+mode.
 
 **Permission model** (three layers of "review only" enforcement):
 1. The minted App token is down-scoped to `pull-requests: write` plus read-only `contents`, `checks`, `issues`, `actions`, and `security-events`.
@@ -567,6 +578,7 @@ All three personas above share one GitHub App and one set of org secrets:
    - `KNITLI_AGENT_CLIENT_ID` (the App's Client ID, e.g. `Iv23li...`)
    - `KNITLI_AGENT_PRIVATE_KEY`
    - `CLAUDE_CODE_OAUTH_TOKEN` (already exists org-wide)
+   - `ANTHROPIC_API_KEY` (optional; preferred by the reviewer when present)
 
 ---
 
