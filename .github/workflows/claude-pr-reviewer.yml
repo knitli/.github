@@ -54,6 +54,9 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Org subscription OAuth token for Claude Code'
         required: true
+      ANTHROPIC_API_KEY:
+        description: 'Anthropic API key; preferred over subscription OAuth when configured'
+        required: false
 
 # Layer 2: the workflow GITHUB_TOKEN stays read-only. All writes go through the
 # down-scoped App token minted below, which is what makes comments post as
@@ -65,10 +68,6 @@ permissions:
   actions: read
   checks: read
   issues: read
-
-concurrency:
-  group: claude-pr-reviewer-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
-  cancel-in-progress: true
 
 jobs:
   # Fail-closed gate: refuses to start the agent when the triggering thread
@@ -135,6 +134,12 @@ jobs:
   review:
     needs: sanitize
     timeout-minutes: 70
+    # Reviews are quota-heavy. Queue them per caller repository so a stacked-PR
+    # submission cannot exhaust the provider in one burst. The freshness gate
+    # below makes superseded queued events cheap no-ops.
+    concurrency:
+      group: knitli-pr-reviewer-${{ github.repository }}
+      queue: max
     # Auto-review on PR events; on-demand review when a comment mentions the
     # review alias on a PR (issue_comment) or on a diff line (review comment).
     if: >-
@@ -169,9 +174,128 @@ jobs:
           permission-issues: read
           permission-actions: read
 
+      - name: Check pull request freshness
+        id: freshness
+        shell: bash
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          live_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+
+          current=true
+          if [ "${EVENT_NAME}" = pull_request ] && [ "${EVENT_HEAD_SHA}" != "${live_head}" ]; then
+            current=false
+            echo "Skipping superseded review event for ${EVENT_HEAD_SHA}; current head is ${live_head}."
+          fi
+
+          echo "current=${current}" >>"${GITHUB_OUTPUT}"
+
+      - name: Select Anthropic credential
+        id: anthropic-auth
+        if: steps.freshness.outputs.current == 'true'
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY}" ]; then
+            echo 'mode=api-key' >>"${GITHUB_OUTPUT}"
+          else
+            echo 'mode=oauth' >>"${GITHUB_OUTPUT}"
+          fi
+
+      # claude-code-action currently hides the API status behind an
+      # `is_error:true` result envelope. This one-token probe logs only the HTTP
+      # status and allowlisted rate-limit headers; it never logs the response
+      # body or either credential.
+      - name: Probe Anthropic availability
+        id: anthropic-probe
+        if: steps.freshness.outputs.current == 'true'
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AUTH_MODE: ${{ steps.anthropic-auth.outputs.mode }}
+          MODEL: ${{ inputs.model || 'claude-sonnet-5' }}
+          OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          headers="${RUNNER_TEMP}/anthropic-probe.headers"
+          request="${RUNNER_TEMP}/anthropic-probe.json"
+          curl_headers=(
+            --header 'anthropic-version: 2023-06-01'
+            --header 'content-type: application/json'
+          )
+
+          if [ "${AUTH_MODE}" = api-key ]; then
+            curl_headers+=(--header "x-api-key: ${ANTHROPIC_API_KEY}")
+          else
+            curl_headers+=(
+              --header "authorization: Bearer ${OAUTH_TOKEN}"
+              --header 'anthropic-beta: oauth-2025-04-20'
+            )
+          fi
+
+          jq -n \
+            --arg model "${MODEL}" \
+            --arg system "You are Claude Code, Anthropic's official CLI for Claude." \
+            '{
+            model: $model,
+            max_tokens: 1,
+            system: $system,
+            messages: [{role: "user", content: "Reply OK."}]
+          }' >"${request}"
+
+          set +e
+          status="$(curl --silent --show-error \
+            --output /dev/null \
+            --dump-header "${headers}" \
+            --write-out '%{http_code}' \
+            --request POST \
+            "${curl_headers[@]}" \
+            --data-binary "@${request}" \
+            'https://api.anthropic.com/v1/messages')"
+          curl_status=$?
+          set -e
+
+          if [ "${curl_status}" -ne 0 ]; then
+            status=000
+          fi
+
+          available=false
+          if [ "${status}" = 200 ]; then
+            available=true
+          fi
+
+          echo "available=${available}" >>"${GITHUB_OUTPUT}"
+          echo "status=${status}" >>"${GITHUB_OUTPUT}"
+
+          {
+            echo '### Anthropic provider probe'
+            echo "- Credential: \`${AUTH_MODE}\`"
+            echo "- HTTP status: \`${status}\`"
+            if [ "${status}" = 429 ]; then
+              awk -F ': *' '
+                {
+                  key = tolower($1)
+                }
+                key == "retry-after" ||
+                key == "anthropic-ratelimit-unified-7d-status" ||
+                key == "anthropic-ratelimit-unified-overage-status" ||
+                key == "anthropic-ratelimit-unified-overage-disabled-reason" {
+                  sub(/\r$/, "", $2)
+                  printf "- %s: `%s`\n", key, $2
+                }
+              ' "${headers}"
+            fi
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
       # Layer 3: pin Claude to inline review comments + read-only gh PR commands.
       - name: Build Claude args
         id: args
+        if: steps.freshness.outputs.current == 'true' && steps.anthropic-probe.outputs.available == 'true'
         env:
           MODEL: ${{ inputs.model }}
         run: |
@@ -186,6 +310,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repo
+        if: steps.freshness.outputs.current == 'true' && steps.anthropic-probe.outputs.available == 'true'
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
          token: ${{ steps.app-token.outputs.token }}
@@ -193,6 +318,9 @@ jobs:
          submodules: recursive
 
       - name: Claude PR review
+        if: >-
+          steps.freshness.outputs.current == 'true' &&
+          steps.anthropic-probe.outputs.available == 'true'
         uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -200,7 +328,9 @@ jobs:
           bot_id: 142185322
           bot_name: >-
             knitli-agent[bot]
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: >-
+            ${{ steps.anthropic-auth.outputs.mode == 'oauth' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           github_token: ${{ steps.app-token.outputs.token }}
           claude_args: ${{ steps.args.outputs.value }}
           additional_permissions: |
@@ -252,3 +382,25 @@ jobs:
 
             If the diff is empty or you cannot read it, say so in the summary
             comment and stop.
+
+      - name: Fail when Anthropic is unavailable
+        if: steps.freshness.outputs.current == 'true' && steps.anthropic-probe.outputs.available != 'true'
+        shell: bash
+        env:
+          STATUS: ${{ steps.anthropic-probe.outputs.status }}
+        run: |
+          case "${STATUS}" in
+            401)
+              echo 'Anthropic rejected the configured credential (HTTP 401).' >&2
+              ;;
+            429)
+              echo 'Anthropic rejected the review because its usage quota is exhausted (HTTP 429).' >&2
+              ;;
+            000)
+              echo 'The Anthropic availability probe could not reach the API.' >&2
+              ;;
+            *)
+              echo "Anthropic is unavailable (HTTP ${STATUS})." >&2
+              ;;
+          esac
+          exit 1
