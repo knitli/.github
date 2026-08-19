@@ -383,24 +383,54 @@ jobs:
             If the diff is empty or you cannot read it, say so in the summary
             comment and stop.
 
-      - name: Fail when Anthropic is unavailable
+      # A rejected credential is a real configuration defect and stays a hard
+      # failure. A provider-side availability problem (quota exhaustion,
+      # unreachable API, a 5xx from Anthropic) is not a verdict on this pull
+      # request, so it reports as a skipped, successful job instead of
+      # painting the check red — the review will run again on the next push
+      # or on-demand via the review alias comment. 403 is treated the same as
+      # 401: Anthropic returns it for permission/organization-access denials,
+      # which are credential-side configuration problems, not outages.
+      - name: Handle Anthropic probe result
         if: steps.freshness.outputs.current == 'true' && steps.anthropic-probe.outputs.available != 'true'
         shell: bash
         env:
           STATUS: ${{ steps.anthropic-probe.outputs.status }}
         run: |
+          set -euo pipefail
+
+          fail=false
           case "${STATUS}" in
             401)
-              echo 'Anthropic rejected the configured credential (HTTP 401).' >&2
+              fail=true
+              message='Anthropic rejected the configured credential (HTTP 401). This is a configuration problem: fix the ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN secret.'
+              ;;
+            403)
+              fail=true
+              message='Anthropic rejected the configured credential (HTTP 403). This is a configuration problem: check the credential'"'"'s permissions and organization access.'
               ;;
             429)
-              echo 'Anthropic rejected the review because its usage quota is exhausted (HTTP 429).' >&2
+              message='Anthropic rejected the review because its usage quota is exhausted (HTTP 429). This is a provider capacity issue, not a defect in this pull request.'
               ;;
             000)
-              echo 'The Anthropic availability probe could not reach the API.' >&2
+              message='The Anthropic availability probe could not reach the API. This looks like a transient network or provider outage, not a defect in this pull request.'
+              ;;
+            5[0-9][0-9])
+              message="Anthropic returned a server error (HTTP ${STATUS}). This looks like a transient provider outage, not a defect in this pull request."
               ;;
             *)
-              echo "Anthropic is unavailable (HTTP ${STATUS})." >&2
+              message="Anthropic is unavailable (HTTP ${STATUS})."
               ;;
           esac
-          exit 1
+
+          if [ "${fail}" = true ]; then
+            echo "${message}" >&2
+            exit 1
+          fi
+
+          {
+            echo '### Review skipped'
+            echo "${message}"
+            echo ''
+            echo 'The reviewer will run again on the next push, or on-demand via the review alias comment.'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
