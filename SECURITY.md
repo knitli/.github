@@ -29,8 +29,8 @@ Knitli's authorization only covers activities you conduct yourself against asset
 > - [Marque source code](https://github.com/knitli/marque)
 > - Source code for any repository in the Knitli or marquetools GitHub organization
 > - Released Marque or Knitli artifacts distributed through our official channels (crates.io, PyPI, npm, GitHub Releases)
-> - Knitli-operated infrastructure directly supporting Marque (marque.tools, *.marque.tools, knitli.com, *.knitli.com)
-> - Knitli corporate infrastructure and backend services and automations
+> - Knitli-operated infrastructure directly supporting Knitli or Marque (knitli.com, *.knitli.com)
+> - Knitli corporate infrastructure and backend services and automations (*.knitli.app, *.knit.li, *.knitli.com, *.marque.tools)
 > - Marque or Knitli hosted services operated by Knitli (none currently; we'll list them here when they exist)
 
 #### Out of Scope
