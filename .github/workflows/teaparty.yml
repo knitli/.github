@@ -80,6 +80,9 @@ on:
       KNITLI_AGENT_PRIVATE_KEY:
         description: 'Private key (.pem) for the knitli-agent GitHub App (optional; falls back to GITHUB_TOKEN)'
         required: false
+      GITHUB_PAT:
+        description: 'PAT to allow content and PR edits outside the runner scope.'
+        required: false
 
 permissions:
   contents: write
@@ -108,7 +111,10 @@ jobs:
         id: has-app-creds
         env:
           CLIENT_ID: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
-        run: echo "value=${{ env.CLIENT_ID != '' }}" >> "$GITHUB_OUTPUT"
+          PAT: ${{ secrets.GITHUB_PAT }}
+        run: |
+          echo "value=${{ env.CLIENT_ID != '' }}" >> "$GITHUB_OUTPUT"
+          echo "pat=${{ env.PAT != '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Mint down-scoped app token
         id: app-token
@@ -122,10 +128,15 @@ jobs:
           permission-contents: write
           permission-actions: ${{ case(inputs.actions == 'true', 'write', 'none') }}
 
+      - name: Use PAT if available
+        id: set-token
+        run: |
+          echo "token=${{ env.pat || steps.app-token.outputs.token || github.token }}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout caller repo
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          token: ${{ steps.set-token.outputs.token || github.token }}
           persist-credentials: true
           fetch-depth: 0
 
@@ -133,7 +144,7 @@ jobs:
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
           repository: knitli/.github
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          token: ${{ steps.set-token.outputs.token || github.token }}
           path: .teaparty-src
           sparse-checkout: |
             scripts/teaparty
