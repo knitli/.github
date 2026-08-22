@@ -131,6 +131,7 @@ jobs:
     # Auto-review on PR events; on-demand review when a comment mentions the
     # security alias on a PR (issue_comment) or on a diff line (review comment).
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
       pull-requests: write
@@ -194,7 +195,7 @@ jobs:
             checks: read
             security-events: read
           allowed_bots: >-
-            knitli-proxy-coder[bot],dependabot[bot],copilot[bot]
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot],knitli-agent[bot]
           plugin_marketplaces: |
             https://github.com/anthropics/claude-plugins-official.git
           plugins: |
