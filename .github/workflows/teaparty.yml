@@ -86,6 +86,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: teaparty-${{ github.event.pull_request.number || github.ref }}
@@ -113,12 +114,12 @@ jobs:
           CLIENT_ID: ${{ secrets.KNITLI_AGENT_CLIENT_ID }}
           PAT: ${{ secrets.TEAPARTY_PAT }}
         run: |
-          echo "value=${{ env.CLIENT_ID != '' }}" >> "$GITHUB_OUTPUT"
-          echo "pat=${{ env.PAT != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_value=${{ env.CLIENT_ID != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_pat=${{ env.PAT != '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Mint down-scoped app token
         id: app-token
-        if: steps.has-app-creds.outputs.value == 'true'
+        if: steps.has-app-creds.outputs.has_value == 'true' && steps.has-app-creds.has_pat != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
@@ -130,13 +131,23 @@ jobs:
 
       - name: Use PAT if available
         id: set-token
+        env:
+          HAS_PAT: ${{ steps.has-app-creds.outputs.has_pat == 'true' }}
+          HAS_APP_TOKEN: ${{ steps.has-app-creds.has_value == 'true' }}
         run: |
-          echo "token=${{ env.pat || steps.app-token.outputs.token || github.token }}" >> "$GITHUB_OUTPUT"
+          if [[ "$HAS_PAT" == 'true' ]]; then
+            TOKEN="${{ secrets.TEAPARTY_PAT }}"
+          elif [[ "$HAS_APP_TOKEN" == 'true' ]]; then
+            TOKEN="${{ steps.app-token.outputs.token }}"
+          else
+            TOKEN="${{ secrets.GITHUB_TOKEN || github.token }}"
+          fi
+          echo "TOKEN=\"$TOKEN\"" >> "$GITHUB_OUTPUT"
 
       - name: Checkout caller repo
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
-          token: ${{ steps.set-token.outputs.token || github.token }}
+          token: ${{ steps.set-token.outputs.TOKEN }}
           persist-credentials: true
           fetch-depth: 0
 
@@ -144,7 +155,7 @@ jobs:
         uses: actions/checkout@b9e0990d219a03df7633c93f6f005a8fecbcab22
         with:
           repository: knitli/.github
-          token: ${{ steps.set-token.outputs.token || github.token }}
+          token: ${{ steps.set-token.outputs.TOKEN }}
           path: .teaparty-src
           sparse-checkout: |
             scripts/teaparty
