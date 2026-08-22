@@ -134,6 +134,7 @@ jobs:
   review:
     needs: sanitize
     timeout-minutes: 70
+    continue-on-error: true
     # Reviews are quota-heavy. Queue them per caller repository so a stacked-PR
     # submission cannot exhaust the provider in one burst. The freshness gate
     # below makes superseded queued events cheap no-ops.
@@ -324,6 +325,7 @@ jobs:
         uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        continue-on-error: true
         with:
           bot_id: 142185322
           bot_name: >-
@@ -340,7 +342,7 @@ jobs:
             checks: read
             issues: read
           allowed_bots: >-
-            knitli-proxy-coder[bot],dependabot[bot],copilot[bot],google-labs-jules[bot]
+            knitli-proxy-coder[bot],dependabot[bot],copilot[bot],google-labs-jules[bot],knitli-agent[bot]
           plugin_marketplaces: |
             https://github.com/anthropics/claude-plugins-official.git
           plugins: |
@@ -394,6 +396,7 @@ jobs:
       - name: Handle Anthropic probe result
         if: steps.freshness.outputs.current == 'true' && steps.anthropic-probe.outputs.available != 'true'
         shell: bash
+        continue-on-error: true
         env:
           STATUS: ${{ steps.anthropic-probe.outputs.status }}
         run: |
