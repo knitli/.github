@@ -1,0 +1,12 @@
+[settings]
+auto_install = true
+experimental = true
+gpg_verify = true
+
+[tools]
+actionlint = "latest"
+
+[shell_alias]
+mx = 'mise exec --'
+mr = 'mise run'
+claude = "ECC_GATEGUARD=off COLORTERM=1 {{ env.HOME }}/.local/bin/claude"

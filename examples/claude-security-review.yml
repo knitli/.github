@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Caller workflow for the Knitli Agent Security Review bot.
+#
+# Copy this file into a target repository at:
+#   .github/workflows/claude-security-review.yml
+#
+# All triggering, identity, permission down-scoping, and tool gating live in the
+# reusable workflow at knitli/.github. This caller just wires up the events and
+# inherits the org-level secrets (KNITLI_AGENT_CLIENT_ID, KNITLI_AGENT_PRIVATE_KEY,
+# CLAUDE_CODE_OAUTH_TOKEN).
+#
+# Note: `pull_request` (not `pull_request_target`) means reviews on PRs from
+# forks are intentionally skipped — fork PRs have no access to secrets. See the
+# plan's "Deferred" section before changing this.
+
+name: Claude Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  security-review:
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: read
+      security-events: read
+      # Needed by the reusable workflow's fail-closed `sanitize` gate, which
+      # scans the triggering thread before the agent starts. `issue_comment`
+      # fires on plain issues as well as on PRs, and reading an issue's
+      # comments requires `issues` — reading a *PR's* comments requires
+      # `pull-requests`, even though both go through the /issues/ endpoint.
+      # Without this the gate 403s and blocks the agent. See the README,
+      # "Agent input gating".
+      issues: read
+    uses: knitli/.github/.github/workflows/claude-security-review.yml@main
+    secrets: inherit
+    # Optional overrides:
+    # with:
+    #   security_alias: '@knitli-security'
+    #   model: 'claude-opus-4-8'

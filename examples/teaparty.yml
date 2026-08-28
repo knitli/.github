@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Caller workflow for the "teaparty" British -> American spelling fixer.
+#
+# Copy this file into a target repository at:
+#   .github/workflows/teaparty.yml
+#
+# The dictionary and replacement logic live in knitli/.github; this caller
+# just wires up the trigger. Runs on every push to an open PR, so a fix lands
+# before `typos` (or any other spelling-gated check) ever sees the branch.
+#
+# Secrets are optional: without KNITLI_AGENT_CLIENT_ID/KNITLI_AGENT_PRIVATE_KEY
+# the commit is pushed with the default GITHUB_TOKEN and shows up as
+# `github-actions[bot]` instead of `knitli-agent[bot]`.
+#
+# BEFORE ENABLING: teaparty rewrites bytes in place, so list any path whose
+# exact bytes are load-bearing under `exclude_paths` (see below) — vendored
+# upstream specs, frozen filing snapshots, golden fixtures, deliberate-typo
+# corpora. The repo's own spell-check exclusions (`_typos.toml`) are usually
+# the right starting list. The workflow cannot infer these for you.
+
+name: Teaparty
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  teaparty:
+    permissions:
+      contents: write
+    uses: knitli/.github/.github/workflows/teaparty.yml@main
+    secrets: inherit
+    with:
+      # Newline-separated ERE fragments, ADDED to the built-in exclusions
+      # (never replacing them). Blank lines and `#` comments are ignored; an
+      # invalid pattern fails the run rather than silently scanning nothing.
+      exclude_paths: |
+        # This file. It names the spellings teaparty fixes, so a run rewrites
+        # its own examples into nonsense. Keep this entry.
+        ^\.github/workflows/teaparty\.yml$
+
+        # Your repo's byte-sensitive paths go here: anything whose exact bytes
+        # are load-bearing and must not be rewritten even when the spelling
+        # really is British. Vendored upstream sources, frozen legal/filing
+        # snapshots, golden fixtures, deliberate-misspelling corpora. Your
+        # spell-check config (`_typos.toml`'s `extend-exclude`) is usually the
+        # right starting list. See the README's "Byte-sensitive paths".
+        #
+        # ^docs/vendored/
+        # ^tests/.*\.golden\.json$
+
+    # Other optional overrides:
+    #   dry_run: true

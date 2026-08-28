@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Caller workflow for the Knitli Agent Fix (general implementation) bot.
+#
+# Copy this file into a target repository at:
+#   .github/workflows/claude-fix.yml
+#
+# All triggering, identity, permission down-scoping, and tool gating live in the
+# reusable workflow at knitli/.github. This caller just wires up the events and
+# inherits the org-level secrets (KNITLI_AGENT_CLIENT_ID, KNITLI_AGENT_PRIVATE_KEY,
+# CLAUDE_CODE_OAUTH_TOKEN).
+#
+# On-demand only: mention @knitli-fix in a comment on an issue or PR. This is the
+# highest-trust persona (it edits code and opens PRs) — enable it deliberately.
+
+name: Claude Fix
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  fix:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+      checks: read
+    uses: knitli/.github/.github/workflows/claude-fix.yml@main
+    secrets: inherit
+    # Optional overrides:
+    # with:
+    #   fix_alias: '@knitli-fix'
+    #   model: 'claude-opus-4-8'

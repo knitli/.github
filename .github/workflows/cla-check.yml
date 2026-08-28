@@ -1,0 +1,502 @@
+# SPDX-FileCopyrightText: 2025 Knitli Inc. <knitli@knit.li>
+# SPDX-FileContributor: Adam Poulemanos <adam@knit.li>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Reusable CLA check workflow for all Knitli repositories
+#
+# This workflow checks if PR contributors have signed the CLA and stores
+# signatures centrally in knitli/.github/cla-signatures/
+#
+# Usage in your repository:
+#   uses: knitli/.github/.github/workflows/cla-check.yml@main
+#   with:
+#     repo_name: "codeweaver"  # or "thread", etc.
+#     cla_document_url: "https://github.com/knitli/codeweaver/blob/main/CLA.md"  # optional
+#   secrets: inherit
+
+name: CLA Check
+
+on:
+  workflow_call:
+    inputs:
+      repo_name:
+        description: 'Repository name for signature file (e.g., "codeweaver")'
+        required: true
+        type: string
+      cla_document_url:
+        description: 'URL to the CLA document'
+        required: false
+        type: string
+        default: ''
+      branch:
+        description: 'Branch for storing signatures in .github repo'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      CLA_ACCESS_TOKEN:
+        description: 'Personal access token with write access to knitli/.github repo'
+        required: true
+
+concurrency:
+  group: cla-check-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  check-cla:
+    runs-on: ubuntu-latest
+    outputs:
+      is_knitli_repo: ${{ steps.check-repo.outputs.is_knitli_repo }}
+      is_member: ${{ steps.check-membership.outputs.is_member }}
+      should_run_cla: ${{ steps.check-membership.outputs.should_run_cla }}
+      exempt_users: ${{ steps.check-membership.outputs.exempt_users }}
+      exempt_users_csv: ${{ steps.check-membership.outputs.exempt_users_csv }}
+      needs_cla_csv: ${{ steps.check-membership.outputs.needs_cla_csv }}
+    steps:
+      - name: Debug Event Context
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Action: ${{ github.event.action }}"
+          echo "PR Number: ${{ github.event.pull_request.number }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "SHA: ${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Check Repository
+        id: check-repo
+        run: |
+          repo="${{ github.repository }}"
+          if [[ ! $repo =~ ^knitli/ ]]; then
+            echo "This action is only for Knitli repositories (found: $repo)"
+            echo "is_knitli_repo=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "is_knitli_repo=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check Membership (check all PR committers)
+        id: check-membership
+        if: steps.check-repo.outputs.is_knitli_repo == 'true'
+        env:
+          CLA_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+
+          # Determine PR number or fallback to actor
+          PR_NUMBER=""
+          if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+            PR_NUMBER="$(jq -r '.pull_request.number // .issue.number // empty' "$GITHUB_EVENT_PATH")" || true
+          fi
+
+          # Fallback to actor if we can't find PR number
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "No PR number found in event; falling back to single author check"
+            if [[ "${{ github.event_name }}" == "pull_request_target" ]]; then
+              AUTHOR="${{ github.event.pull_request.user.login }}"
+            else
+              AUTHOR="${{ github.event.issue.user.login }}"
+            fi
+            if [[ -z "$AUTHOR" ]]; then
+              AUTHOR="${{ github.actor }}"
+            fi
+            USERS="$AUTHOR"
+          else
+            echo "PR number detected: $PR_NUMBER"
+            # Fetch commits for PR and collect commit authors/committers
+            COMMITS_JSON=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/commits")
+            # Extract possible GitHub logins (author.login or committer.login) and unique them
+            USERS=$(echo "$COMMITS_JSON" | jq -r '.[] | .author.login // .committer.login // empty' | sed '/^$/d' | sort -u || true)
+            # If no login found (e.g., imported email-only commits), fall back to PR author/actor
+            if [[ -z "$USERS" ]]; then
+              echo "No commit-linked GitHub users found; falling back to PR author/actor"
+              if [[ -n "${{ github.event.pull_request.user.login || github.event.issue.user.login }}" ]]; then
+                USERS="${{ github.event.pull_request.user.login || github.event.issue.user.login }}"
+              else
+                USERS="${{ github.actor }}"
+              fi
+            fi
+          fi
+
+          echo "Potential committers found: "
+          for u in $USERS; do echo " - $u"; done
+
+          # Bot/allowlist detection (case-insensitive)
+          is_allowed_bot() {
+            local u_lower
+            u_lower="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+            # Patterns: endswith [bot], contains bot, or well-known automation accounts
+            if [[ "$u_lower" =~ \[bot\]$ ]] || \
+               [[ "$u_lower" =~ bot$ ]] || \
+               [[ "$u_lower" =~ ^dependabot ]] || \
+               [[ "$u_lower" =~ ^github-actions ]] || \
+               [[ "$u_lower" =~ ^changeset-bot ]] || \
+               [[ "$u_lower" =~ ^claude ]] || \
+               [[ "$u_lower" =~ ^copilot ]] || \
+               [[ "$u_lower" =~ ^codegen-sh ]] || \
+               [[ "$u_lower" =~ ^sourcery ]] || \
+               [[ "$u_lower" =~ ^github-code-quality ]]; then
+              return 0
+            fi
+            return 1
+          }
+
+          # Check each user for org membership or allowlist
+          NEEDS_CLA=()
+          EXEMPT_USERS=()
+          EXEMPT_USERNAMES=()
+          for user in $USERS; do
+            if [[ -z "$user" ]]; then
+              NEEDS_CLA+=("<unknown>")
+              continue
+            fi
+
+            if is_allowed_bot "$user"; then
+              echo "Skipping bot/allowlisted account: $user"
+              EXEMPT_USERS+=("$user (bot)")
+              EXEMPT_USERNAMES+=("$user")
+              continue
+            fi
+
+            # Check if user is a repository collaborator (works with GITHUB_TOKEN)
+            # This API returns 204 if user has push access, 404 otherwise
+            collab_response=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/collaborators/$user")
+
+            if [ "$collab_response" == "204" ]; then
+              echo "User $user is a repository collaborator"
+              EXEMPT_USERS+=("$user (collaborator)")
+              EXEMPT_USERNAMES+=("$user")
+              continue
+            fi
+
+            # Fallback: Check org membership using CLA_ACCESS_TOKEN (has org:read scope)
+            # Only attempt if CLA_ACCESS_TOKEN is available
+            if [ -n "$CLA_ACCESS_TOKEN" ]; then
+              org_response=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $CLA_ACCESS_TOKEN" \
+                "https://api.github.com/orgs/knitli/members/$user")
+
+              if [ "$org_response" == "204" ]; then
+                echo "User $user is a Knitli org member"
+                EXEMPT_USERS+=("$user (org member)")
+                EXEMPT_USERNAMES+=("$user")
+                continue
+              elif [ "$org_response" == "404" ] || [ "$org_response" == "302" ]; then
+                # 404 = not a member, 302 = requester is not an org member (can't see membership)
+                echo "User $user is NOT a collaborator or org member and may require CLA"
+                NEEDS_CLA+=("$user")
+              else
+                # API error (rate limit, network issue, etc.) - fail open and require CLA
+                echo "Warning: Org membership check for $user returned $org_response, requiring CLA as precaution"
+                NEEDS_CLA+=("$user")
+              fi
+            else
+              # No CLA_ACCESS_TOKEN available, can't check org membership
+              echo "Warning: CLA_ACCESS_TOKEN not available, cannot check org membership for $user"
+              echo "User $user is NOT a collaborator and may require CLA"
+              NEEDS_CLA+=("$user")
+            fi
+          done
+
+          # Output exempt users as JSON array for later use
+          # Handle empty array case by checking length first
+          if [ ${#EXEMPT_USERS[@]} -eq 0 ]; then
+            EXEMPT_JSON='[]'
+          else
+            EXEMPT_JSON=$(printf '%s\n' "${EXEMPT_USERS[@]}" | jq -R . | jq -s -c .)
+          fi
+          echo "exempt_users=$EXEMPT_JSON" >> "$GITHUB_OUTPUT"
+
+          # Output exempt usernames as comma-separated string for allowlist
+          if [ ${#EXEMPT_USERNAMES[@]} -eq 0 ]; then
+            EXEMPT_USERNAMES_CSV=""
+          else
+            EXEMPT_USERNAMES_CSV="$(IFS=','; echo "${EXEMPT_USERNAMES[*]}")"
+          fi
+          echo "exempt_users_csv=$EXEMPT_USERNAMES_CSV" >> "$GITHUB_OUTPUT"
+
+          # Output users who need CLA as comma-separated string, excluding
+          # non-mentionable placeholders such as "<unknown>"
+          NEEDS_CLA_MENTIONABLE=()
+          for user in "${NEEDS_CLA[@]}"; do
+            if [ "$user" != "<unknown>" ]; then
+              NEEDS_CLA_MENTIONABLE+=("$user")
+            fi
+          done
+
+          if [ ${#NEEDS_CLA_MENTIONABLE[@]} -eq 0 ]; then
+            NEEDS_CLA_CSV=""
+          else
+            NEEDS_CLA_CSV="$(IFS=','; echo "${NEEDS_CLA_MENTIONABLE[*]}")"
+          fi
+          echo "needs_cla_csv=$NEEDS_CLA_CSV" >> "$GITHUB_OUTPUT"
+
+          if [ ${#NEEDS_CLA[@]} -eq 0 ]; then
+            echo "All committers are org members or allowed bots; CLA not required"
+            echo "is_member=true" >> "$GITHUB_OUTPUT"
+            echo "should_run_cla=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The following committers need to sign the CLA: ${NEEDS_CLA[*]}"
+            echo "is_member=false" >> "$GITHUB_OUTPUT"
+            echo "should_run_cla=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Post success comment when all committers are exempt (org members or bots)
+  post-exempt-status:
+    needs: check-cla
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      # Add this NEW step BEFORE the comment step
+      - name: Create Success Status Check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            let prNumber, sha;
+
+            if (context.eventName === 'issue_comment') {
+              // For issue_comment events, context.payload.pull_request is not set.
+              // Verify the comment is on a PR by checking if issue.pull_request exists
+              // (GitHub sets this field when the issue is actually a pull request).
+              if (!context.payload.issue?.pull_request) {
+                console.log('issue_comment is on a regular issue (not a PR), skipping status check');
+                return;
+              }
+              prNumber = context.payload.issue.number;
+              // Fetch the PR to get the current head SHA
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              sha = pr.head.sha;
+            } else {
+              prNumber = context.payload.pull_request?.number;
+              sha = context.payload.pull_request?.head?.sha || context.sha;
+            }
+
+            if (!sha) {
+              console.log('No SHA found, skipping status check');
+              return;
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: sha,
+              state: 'success',
+              context: 'CLA Assistant',
+              description: 'All contributors are exempt (org members/bots)',
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber || ''}`
+            });
+
+            console.log('Created success status check for CLA');
+  
+  cla-assistant:
+    needs: check-cla
+    # Make this condition MORE explicit and guard against non-PR issue_comment events
+    if: needs.check-cla.outputs.is_knitli_repo == 'true' && needs.check-cla.outputs.should_run_cla == 'true' && (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Determine CLA URL
+        id: cla-url
+        run: |
+          if [ -n "${{ inputs.cla_document_url }}" ]; then
+            echo "url=${{ inputs.cla_document_url }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=https://github.com/${{ github.repository }}/blob/main/CONTRIBUTORS_LICENSE_AGREEMENT.md" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify CLA Required
+        run: |
+          echo "CLA check required for non-exempt users"
+          echo "should_run_cla=${{ needs.check-cla.outputs.should_run_cla }}"
+          if [ "${{ needs.check-cla.outputs.should_run_cla }}" != "true" ]; then
+            echo "ERROR: CLA assistant job should not run - all users are exempt"
+            exit 1
+          fi
+
+      - name: Get User
+        id: cla-user
+        run: |
+          echo 'CLA_USER=${{ needs.check-cla.outputs.needs_cla_csv }}' >> "$GITHUB_ENV"
+
+      - name: Post Multi-Author CLA Comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Only run for pull_request_target opened/synchronize events or issue_comment events on PRs.
+            // On issue_comment we only *create* the comment when missing — never update — so we don't
+            // re-ping contributors who already signed and triggered the re-run via a comment.
+            const isIssueComment = context.eventName === 'issue_comment';
+            const isPrTarget = context.eventName === 'pull_request_target';
+            const prTargetAction = context.payload.action;
+
+            if (isIssueComment && !context.payload.issue?.pull_request) {
+              console.log('issue_comment is on a regular issue (not a PR), skipping');
+              return;
+            }
+            if (!isPrTarget && !isIssueComment) {
+              console.log(`Event ${context.eventName} not applicable for CLA comment, skipping`);
+              return;
+            }
+            if (isPrTarget && prTargetAction !== 'opened' && prTargetAction !== 'synchronize') {
+              console.log(`pull_request_target action '${prTargetAction}' — skipping CLA comment (only post on opened/synchronize)`);
+              return;
+            }
+
+            const needsCsvRaw = '${{ needs.check-cla.outputs.needs_cla_csv }}';
+            if (!needsCsvRaw) {
+              console.log('No users need CLA, skipping comment');
+              return;
+            }
+
+            const users = needsCsvRaw.split(',').map(u => u.trim()).filter(Boolean);
+            if (users.length === 0) {
+              console.log('No users need CLA, skipping comment');
+              return;
+            }
+
+            const prNumber = context.payload.pull_request?.number || context.payload.issue?.number;
+            if (!prNumber) {
+              console.log('No PR number found, skipping comment');
+              return;
+            }
+
+            const repoName = '${{ inputs.repo_name }}';
+            const claUrl = '${{ steps.cla-url.outputs.url }}';
+            const mentions = users.map(u => `@${u}`).join(', ');
+            const MARKER = '<!-- cla-multi-author-check -->';
+
+            const body = [
+              MARKER,
+              `👋 Hey ${mentions},`,
+              '',
+              `## Thanks for your contribution to \`${repoName}\`! 🧵`,
+              '',
+              '### Sign the CLA to get started 🖊️',
+              '',
+              'Each of you needs to agree to our Contributor License Agreement (CLA) before we can accept this contribution. If you already signed, you\'re all set — no further action needed.',
+              '',
+              '### To agree to the CLA, please comment:',
+              '> I read the contributors license agreement and I agree to it.',
+              '',
+              'Those exact words are important[^1] — our bot needs them to recognize your agreement.',
+              '',
+              `You can read the full CLA here: [Contributor License Agreement](${claUrl})`,
+              '',
+              '[^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.',
+            ].join('\n');
+
+            // Search for existing comment with marker (paginate in case of many comments)
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existingComment = comments.find(c => c.body.includes(MARKER));
+
+            if (existingComment) {
+              if (isIssueComment) {
+                // On issue_comment events, never update — avoids re-pinging contributors who already signed
+                console.log(`CLA comment exists (id=${existingComment.id}); on issue_comment event, skipping update`);
+              } else if (existingComment.body === body) {
+                console.log(`Existing CLA comment already up to date (id=${existingComment.id}), skipping update`);
+              } else {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body,
+                });
+                console.log(`Updated existing CLA comment (id=${existingComment.id})`);
+              }
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+              console.log('Posted new CLA comment');
+            }
+
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ACCESS_TOKEN }}
+          USERNAME: ${{ case(contains(',', env.CLA_USER || ''), format(env.CLA_USER || '', ',', ', @'), join(fromJson('["@", "env.CLA_USER"]'), '')) }}
+        with:
+          # Remote repository configuration
+          remote-organization-name: knitli
+          remote-repository-name: .github
+          path-to-signatures: cla-signatures/${{ inputs.repo_name }}.json
+
+          # CLA document location
+          path-to-document: ${{ steps.cla-url.outputs.url }}
+
+          # Branch for signatures
+          branch: ${{ inputs.branch }}
+
+          # Bot allowlist (users who don't need to sign)
+          # This is a fallback safety net - the check-membership step filters bots/org members first.
+          # Using glob patterns (*) supported by the CLA Assistant action.
+          # Patterns cover: names ending in "bot", names ending in "[bot]", and specific known bots.
+          # The is_allowed_bot() function in check-membership uses regex, while this uses globs,
+          # so there may be minor differences. The check-membership step is the primary filter.
+          # Dynamic exempt users from check-cla job are appended at the end.
+          allowlist: bot*,*bot,*[bot],claude*,copilot*,dependabot*,github-actions*,codegen-sh*,changeset-bot*,actions-user,sourcery*,github-code-quality*${{ needs.check-cla.outputs.exempt_users_csv && format(',{0}', needs.check-cla.outputs.exempt_users_csv) || '' }}
+
+          # Commit messages
+          create-file-commit-message: 'chore: initialize CLA signatures for ${{ inputs.repo_name }}'
+          signed-commit-message: '${{ github.actor }} signed the CLA for ${{ inputs.repo_name }} PR #${{ github.event.pull_request.number || github.event.issue.number }}'
+
+          # Custom PR comments
+          custom-notsigned-prcomment: |
+            👋 Hey "$USERNAME",
+
+            ## Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
+
+            ### You need to agree to the CLA first... 🖊️
+
+            Before we can accept your contribution, **you need to agree to our Contributor License Agreement (CLA)**.
+
+            ### To agree to the CLA, please comment:
+
+            > I read the contributors license agreement and I agree to it.
+
+            Those exact words are important[^1], so please don't change them. 😉
+
+            You can read the full CLA here: [Contributor License Agreement](${{ steps.cla-url.outputs.url }})
+
+            [^1]: Our bot needs those *exact* words to recognize that you agree to the CLA.
+
+          custom-pr-sign-comment: |
+            ✅ @${{ github.actor }} has signed the CLA.
+
+          custom-allsigned-prcomment: |
+            ## 🚀 All contributors have signed the CLA! 👍
+
+            ### Thanks for your contribution to ${{ inputs.repo_name }}! 🧵
+
+            Your contribution is ready to be reviewed and merged[^1]. 🎉
+
+            [^1]: Pending other CI checks, of course. 😉
