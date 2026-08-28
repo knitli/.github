@@ -15,13 +15,11 @@ response commitments, and the coordinated-disclosure window.
 
 ## How to report
 
-- **GitHub Private Vulnerability Reporting (preferred).**
-  [Marque](https://github.com/knitli/marque/security/advisories/new) ·
-  [everything else](https://github.com/knitli/.github/security/advisories/new)
 - **Encrypted email** to
   [security@knitli.com](mailto:security@knitli.com). Our public PGP key is at
   <https://knitli.com/.well-known/pgp-key.txt> (fingerprint
-  `5c6f01e5ca848e0d0926596177f53342fc6ecc67`).
+  `0F54 64D4 F700 BFCB 86C9 9653 2199 67BF 4361 8F4D`).
+- Semaphore, but at that point just go a little further and talk to us.
 
 The machine-readable pointer is
 <https://knitli.com/.well-known/security.txt>.
@@ -32,3 +30,7 @@ The policy used to live here in full, and a second, shorter version lived in
 each repository. They drifted — the numbers disagreed. Published commitments
 are only worth anything if there is exactly one copy of them, so there is now
 exactly one.
+
+Because of that reality, if for some reason we fail to update it and the fingerprint
+above doesn't match the key at `pgp-key.txt`, you should still consider it official
+IF it matches what `security.txt` is signed by. Those are the canonical files.
