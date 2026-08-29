@@ -18,7 +18,8 @@ response commitments, and the coordinated-disclosure window.
 - **Encrypted email** to
   [security@knitli.com](mailto:security@knitli.com). Our public PGP key is at
   <https://knitli.com/.well-known/pgp-key.txt> (fingerprint
-  `0F54 64D4 F700 BFCB 86C9 9653 2199 67BF 4361 8F4D`).
+  `20D62F88EB96F19349DC093CB9635B4CC5A43E9C`).
+- Unencrypted email if you must. Same address.
 - Semaphore, but at that point just go a little further and talk to us.
 
 The machine-readable pointer is
@@ -32,5 +33,6 @@ are only worth anything if there is exactly one copy of them, so there is now
 exactly one.
 
 Because of that reality, if for some reason we fail to update it and the fingerprint
-above doesn't match the key at `pgp-key.txt`, you should still consider it official
-IF it matches what `security.txt` is signed by. Those are the canonical files.
+above doesn't match the key at `https://knitli.com/.well-known/pgp-key.txt`,
+you should still consider it official **if** it verifies against `security.txt`.
+Those are the canonical files.
