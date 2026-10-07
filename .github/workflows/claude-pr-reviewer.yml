@@ -40,10 +40,10 @@ on:
         type: string
         default: '@knitli-review'
       model:
-        description: 'Override the Claude model (e.g. "claude-opus-4-8"). Empty uses the action default.'
+        description: 'Override the Claude model (e.g. "claude-opus-5-5"). Empty uses the action default.'
         required: false
         type: string
-        default: ''
+        default: 'claude-opus-5-5'
     secrets:
       KNITLI_AGENT_CLIENT_ID:
         description: 'Client ID for the knitli-agent GitHub App'
