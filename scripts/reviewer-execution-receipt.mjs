@@ -2,10 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+export const sdkStepName = 'Frozen SDK PR review (execution receipt v1)';
 export const stepName = 'Claude PR review (execution receipt v1)';
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value) ? value : null;
 
-export function project(run, pages, event, current, expected) {
+function projectStep(run, pages, event, current, expected, selectedStep) {
   const receipt = {
     schema: 'knitli-reviewer-execution:v1',
     repository: expected.repository, runId: expected.runId, runAttempt: expected.runAttempt,
@@ -37,7 +38,7 @@ export function project(run, pages, event, current, expected) {
   receipt.reason = matches.length > 1 ? 'ambiguous-review-job' : 'missing-review-job';
   if (matches.length !== 1) return receipt;
   const job = matches[0];
-  const steps = Array.isArray(job.steps) ? job.steps.filter(s => s?.name === stepName) : [];
+  const steps = Array.isArray(job.steps) ? job.steps.filter(s => s?.name === selectedStep) : [];
   if (!steps.length) { receipt.reason = 'missing-review-step'; return receipt; }
   if (steps.length !== 1) { receipt.reason = 'ambiguous-review-step'; return receipt; }
   const step = steps[0];
@@ -50,6 +51,29 @@ export function project(run, pages, event, current, expected) {
   receipt.execution = outcomes[step.conclusion] ?? 'unknown';
   receipt.reason = receipt.execution === 'unknown' ? 'unrecognized-step-conclusion' : 'platform-bound-review-step';
   return receipt;
+}
+
+export function project(run, pages, event, current, expected) {
+  return projectStep(run, pages, event, current, expected, stepName);
+}
+
+/** get is a trusted authenticated GitHub acquisition port, never bundle-supplied data. */
+export function collectSdkExecution(get, expected) {
+  const fixed = Object.freeze({ ...expected });
+  const empty = () => projectStep({}, [], {}, null, fixed, sdkStepName);
+  try {
+    const endpoint = `repos/${fixed.repository}/actions/runs/${fixed.runId}/attempts/${fixed.runAttempt}`;
+    const run = get(endpoint);
+    if (run.repository?.id !== fixed.repositoryId || run.status !== 'completed' || run.conclusion !== 'success') return empty();
+    // GitHub may spell the same immutable workflow ref as @main or @refs/heads/main.
+    const refs = run.referenced_workflows?.filter(workflow => typeof workflow.path === 'string'
+      && workflow.path.split('@')[0] === fixed.reviewWorkflowRef?.split('@')[0]);
+    if (!refs || refs.length !== 1 || refs[0].sha !== fixed.producerRevision) return empty();
+    const receipt = projectStep(run, collectPages(get, `${endpoint}/jobs`), {}, null, fixed, sdkStepName);
+    if (receipt.execution === 'succeeded' && receipt.job?.conclusion !== 'success')
+      return { ...receipt, execution: 'unknown', reason: 'review-job-unsuccessful' };
+    return receipt;
+  } catch { return empty(); }
 }
 
 export function collectPages(get, endpoint) {

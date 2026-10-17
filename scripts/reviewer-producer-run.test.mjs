@@ -361,3 +361,189 @@ test('rejects model aliases before capture', async () => {
     assert.equal(called, false);
   }
 });
+
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { composeAttemptEvidence } from './reviewer-attempt-evidence.mjs';
+import { sdkStepName, stepName } from './reviewer-execution-receipt.mjs';
+const attemptFixture = () => ({ repository: 'knitli/demo', repositoryId: 1, runId: '123', runAttempt: '2', checkRunId: '77',
+  workflowRef: 'knitli/.github/.github/workflows/claude-pr-reviewer.yml@refs/heads/main', workflowSha: 'e'.repeat(40), producerRevision: 'e'.repeat(40) });
+const hashBytes = bytes => createHash('sha256').update(bytes).digest('hex');
+async function evidenceFixture({ mutateContext, stale = false } = {}) {
+  const attempt = attemptFixture();
+  let reads = 0;
+  const input = options({ attemptContext: attempt, readCandidate: async () => {
+    const value = structuredClone(candidate);
+    if (stale && ++reads >= 4) value.head.sha = 'f'.repeat(40);
+    mutateContext?.(attempt);
+    return value;
+  } });
+  const envelope = await runProducer(input);
+  const handoff = { attempt: attemptFixture(), envelopeSha256: hashBytes(await readFile(join(input.outputDirectory, 'envelope.json'))) };
+  const run = { id: 123, run_attempt: 2, status: 'completed', conclusion: 'success', repository: { id: 1, full_name: 'knitli/demo' },
+    referenced_workflows: [{ path: handoff.attempt.workflowRef, sha: handoff.attempt.workflowSha }] };
+  const job = { id: 7, run_id: 123, check_run_url: 'https://api.github.com/repos/knitli/demo/check-runs/77',
+    status: 'completed', conclusion: 'success', head_sha: candidate.head.sha,
+    steps: [{ name: sdkStepName, number: 4, status: 'completed', conclusion: 'success' }] };
+  const page = { total_count: 1, jobs: [job] };
+  const calls = [];
+  const composeOptions = { directory: input.outputDirectory, outputPath: join(root, `${randomUUID()}.evidence.json`),
+    readTrustedHandoff: async () => handoff,
+    get: endpoint => {
+      calls.push(endpoint);
+      if (endpoint === 'repos/knitli/demo/actions/runs/123/attempts/2') return run;
+      if (endpoint === 'repos/knitli/demo/actions/runs/123/attempts/2/jobs?per_page=100&page=1') return page;
+      throw new Error('unexpected authenticated endpoint');
+    } };
+  return { input, envelope, handoff, run, job, page, calls, composeOptions };
+}
+
+test('attempt composition binds independently acquired host digest to exact SDK job, never round completion', async () => {
+  const h = await evidenceFixture({ mutateContext: context => { context.runAttempt = '9'; } });
+  assert.deepEqual(h.envelope.attempt, attemptFixture());
+  assert.equal(Object.isFrozen(h.envelope.attempt), true);
+  const evidence = await composeAttemptEvidence(h.composeOptions);
+  assert.equal(evidence.status, 'matched');
+  assert.equal(evidence.execution.execution, 'succeeded');
+  assert.equal(evidence.provenance, 'unverified');
+  assert.equal(evidence.roundCompletion, 'unknown');
+  assert.equal(evidence.execution.reviewCompletion, 'unknown');
+  assert.deepEqual(JSON.parse(await readFile(h.composeOptions.outputPath)), evidence);
+  assert.equal(h.calls.length, 2);
+  await assert.rejects(composeAttemptEvidence(h.composeOptions), /EEXIST/);
+});
+
+test('attempt context is complete and repository-bound before capture; no self-asserted handoff fallback', async () => {
+  let calls = 0;
+  for (const context of [{}, { ...attemptFixture(), runAttempt: 2 }, { ...attemptFixture(), repository: 'other/repo' },
+    { ...attemptFixture(), workflowSha: 'f'.repeat(40) }]) {
+    await assert.rejects(runProducer(options({ attemptContext: context, capture: () => { calls++; } })), /attempt_context/);
+  }
+  assert.equal(calls, 0);
+  const h = await evidenceFixture();
+  await assert.rejects(composeAttemptEvidence({ ...h.composeOptions, readTrustedHandoff: undefined }), /arguments/);
+  await assert.rejects(composeAttemptEvidence({ ...h.composeOptions, readTrustedHandoff: async () => h.envelope }), /handoff/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('same-head retry and sibling check-run handoffs cannot bind a different producer attempt', async () => {
+  for (const changes of [{ runAttempt: '1' }, { checkRunId: '99' }, { repositoryId: 2 },
+    { workflowSha: 'f'.repeat(40), producerRevision: 'f'.repeat(40) }]) {
+    const h = await evidenceFixture();
+    Object.assign(h.handoff.attempt, changes);
+    await assert.rejects(composeAttemptEvidence(h.composeOptions), /attempt_mismatch/);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('authenticated platform retry, sibling, old action, incomplete pagination and workflow drift never match', async () => {
+  for (const mutate of [h => { h.run.run_attempt = 1; }, h => { h.job.check_run_url = 'https://api.github.com/repos/knitli/demo/check-runs/99'; },
+    h => { h.job.steps[0].name = stepName; }, h => { h.page.total_count = 2; },
+    h => { h.page.jobs.push({ ...h.job }); h.page.total_count = 2; },
+    h => { h.run.referenced_workflows[0].sha = 'f'.repeat(40); }, h => { h.run.repository.id = 2; }]) {
+    const h = await evidenceFixture(); mutate(h);
+    const evidence = await composeAttemptEvidence(h.composeOptions);
+    assert.equal(evidence.status, 'unavailable');
+    assert.equal(evidence.execution.execution, 'unknown');
+    assert.equal(evidence.roundCompletion, 'unknown');
+  }
+});
+
+test('failed skipped cancelled nonterminal or unavailable execution never matches local successful completion', async () => {
+  for (const conclusion of ['failure', 'skipped', 'cancelled', 'timed_out', 'neutral']) {
+    const h = await evidenceFixture(); h.job.steps[0].conclusion = conclusion;
+    assert.equal((await composeAttemptEvidence(h.composeOptions)).status, 'unavailable');
+  }
+  const h = await evidenceFixture(); h.job.status = 'in_progress';
+  assert.equal((await composeAttemptEvidence(h.composeOptions)).status, 'unavailable');
+  const other = await evidenceFixture(); other.composeOptions.get = () => { throw new Error('private token error'); };
+  const evidence = await composeAttemptEvidence(other.composeOptions);
+  assert.equal(evidence.status, 'unavailable');
+  assert.doesNotMatch(JSON.stringify(evidence), /private token/);
+});
+
+test('altered bundle or context cannot substitute for independent retained host digest', async () => {
+  for (const name of ['envelope.json', 'snapshot.json', 'completion.json']) {
+    const h = await evidenceFixture();
+    const file = join(h.input.outputDirectory, name);
+    const { chmod } = await import('node:fs/promises'); await chmod(file, 0o600);
+    await writeFile(file, `${await readFile(file)} `);
+    await assert.rejects(composeAttemptEvidence(h.composeOptions));
+    assert.equal(h.calls.length, 0);
+  }
+  const h = await evidenceFixture();
+  h.handoff.envelopeSha256 = 'f'.repeat(64);
+  await assert.rejects(composeAttemptEvidence(h.composeOptions), /envelope_digest/);
+});
+
+test('final acquisition cannot replace retained producer bytes', async () => {
+  const h = await evidenceFixture();
+  const original = h.composeOptions.get;
+  const { chmodSync, appendFileSync } = await import('node:fs');
+  h.composeOptions.get = endpoint => {
+    const file = join(h.input.outputDirectory, 'envelope.json');
+    chmodSync(file, 0o600); appendFileSync(file, ' ');
+    return original(endpoint);
+  };
+  await assert.rejects(composeAttemptEvidence(h.composeOptions), /envelope_digest/);
+  await assert.rejects(access(h.composeOptions.outputPath));
+});
+
+test('stale candidate stays historical even with exact successful execution evidence', async () => {
+  const h = await evidenceFixture({ stale: true });
+  const evidence = await composeAttemptEvidence(h.composeOptions);
+  assert.equal(evidence.status, 'matched');
+  assert.equal(evidence.applicability, 'stale');
+  assert.equal(evidence.roundCompletion, 'unknown');
+});
+
+const cachedSdk = '/private/tmp/reviewer-sdk-0.3.209-source/package';
+const cachedBinary = '/private/tmp/reviewer-sdk-native-0.3.209-source/package/claude';
+test('actual cached pinned SDK and default producer driver fail before query without a model credential', {
+  skip: !existsSync(join(cachedSdk, 'sdk.mjs')) || !existsSync(cachedBinary) || process.platform !== 'darwin' || process.arch !== 'arm64',
+}, async () => {
+  const input = options({ sdkDirectory: cachedSdk, claudeBinary: cachedBinary });
+  // A clean subprocess cannot inherit a model credential. The real default driver pins and imports
+  // the SDK, then rejects missing apiKey before constructing a query or spawning the native binary.
+  const script = `import { runProducer } from ${JSON.stringify(new URL('./reviewer-producer-run.mjs', import.meta.url).href)};
+import { captureSnapshot } from ${JSON.stringify(new URL('./reviewer-input-snapshot.mjs', import.meta.url).href)};
+import { main as driverMain } from ${JSON.stringify(new URL('./reviewer-completion-driver.mjs', import.meta.url).href)};
+const [input, candidate, repo] = JSON.parse(process.argv[1]);
+const result = await runProducer({...input, readCandidate: async () => candidate, capture: options => captureSnapshot({...options, localRepository: repo})});
+let driverFailure;
+try { await driverMain(['--snapshot', input.outputDirectory+'/snapshot.json', '--snapshot-sha256', result.snapshot.sha256,
+ '--sdk-directory', input.sdkDirectory, '--claude-binary', input.claudeBinary, '--model', input.model,
+ '--receipt', input.outputDirectory+'/probe-completion.json']); } catch (error) { driverFailure = error.message; }
+if (driverFailure !== 'Reviewer completion refused: options') throw new Error('Actual pinned SDK import/options boundary was not reached');
+console.log(JSON.stringify(result));`;
+  const serializable = { repository: input.repository, pullRequest: input.pullRequest, expectedHead: input.expectedHead,
+    expectedBase: input.expectedBase, outputDirectory: input.outputDirectory, sdkDirectory: cachedSdk, claudeBinary: cachedBinary, model: input.model };
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', script, JSON.stringify([serializable, candidate, repo])],
+    { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 30_000, maxBuffer: 1024 * 1024 });
+  const result = JSON.parse(output);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.failure, 'driver_failed');
+  assert.ok(result.snapshot);
+  assert.equal(result.completion, null);
+  await assert.rejects(access(join(input.outputDirectory, 'completion.json')));
+});
+
+
+test('platform workflow ref aliases still require the exact immutable revision', async () => {
+  const h = await evidenceFixture();
+  h.run.referenced_workflows[0].path = h.run.referenced_workflows[0].path.replace('@refs/heads/main', '@main');
+  assert.equal((await composeAttemptEvidence(h.composeOptions)).status, 'matched');
+});
+
+
+test('successful SDK step cannot override failed job or unfinished/failed run attempt', async () => {
+  for (const mutate of [h => { h.job.conclusion = 'failure'; }, h => { h.job.conclusion = 'cancelled'; },
+    h => { h.job.conclusion = 'skipped'; }, h => { h.run.status = 'in_progress'; },
+    h => { h.run.conclusion = 'failure'; }, h => { h.run.conclusion = 'cancelled'; }]) {
+    const h = await evidenceFixture(); mutate(h);
+    const evidence = await composeAttemptEvidence(h.composeOptions);
+    assert.equal(evidence.status, 'unavailable');
+    assert.equal(evidence.execution.execution, 'unknown');
+    assert.equal(evidence.roundCompletion, 'unknown');
+  }
+});

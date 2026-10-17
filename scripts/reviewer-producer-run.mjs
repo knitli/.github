@@ -16,6 +16,20 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
 const safeText = value => typeof value === 'string' && !value.includes('\0') && Buffer.from(value).toString('utf8') === value;
 export const PRODUCER_LIMITS = Object.freeze({ snapshotBytes: 32 * 1024 * 1024, completionBytes: 256 * 1024, envelopeBytes: 64 * 1024 });
 
+/** Host context binds data; it does not authenticate itself. */
+export function captureAttemptContext(value) {
+  const keys = ['repository', 'repositoryId', 'runId', 'runAttempt', 'checkRunId', 'workflowRef', 'workflowSha', 'producerRevision'];
+  if (!exact(value, keys)) fail('attempt_context');
+  const result = Object.freeze(Object.fromEntries(keys.map(key => [key, value[key]])));
+  if (typeof result.repository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(result.repository)
+    || result.repository.split('/').some(part => part === '.' || part === '..')
+    || !Number.isSafeInteger(result.repositoryId) || result.repositoryId < 1
+    || ['runId', 'runAttempt', 'checkRunId'].some(key => typeof result[key] !== 'string' || !/^[1-9][0-9]{0,19}$/.test(result[key]))
+    || typeof result.workflowRef !== 'string' || !/^knitli\/\.github\/\.github\/workflows\/claude-pr-reviewer\.yml@[^\s]{1,256}$/.test(result.workflowRef)
+    || !hex(result.workflowSha) || result.workflowSha !== result.producerRevision) fail('attempt_context');
+  return result;
+}
+
 function boundedFile(path, maximum) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -77,7 +91,9 @@ function validateCompletion(bytes, snapshotDigest, snapshot, model) {
 
 /** Local host orchestration, not authenticated provider admission or cloud authority. */
 export async function runProducer({ repository, pullRequest, expectedHead, expectedBase, outputDirectory, readCandidate,
-  capture = captureSnapshot, runDriver = driverMain, sdkDirectory, claudeBinary, model } = {}) {
+  capture = captureSnapshot, runDriver = driverMain, sdkDirectory, claudeBinary, model, attemptContext } = {}) {
+  const attempt = attemptContext === undefined ? null : captureAttemptContext(attemptContext);
+  if (attempt && attempt.repository !== repository) fail('attempt_context');
   if (typeof repository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || repository.split('/').some(part => part === '.' || part === '..')
     || !Number.isSafeInteger(pullRequest) || pullRequest < 1 || !hex(expectedHead) || !hex(expectedBase)
     || typeof outputDirectory !== 'string' || !isAbsolute(outputDirectory) || typeof readCandidate !== 'function'
@@ -88,7 +104,7 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
   mkdirSync(outputDirectory, { mode: 0o700 });
   const snapshotPath = join(outputDirectory, 'snapshot.json'), completionPath = join(outputDirectory, 'completion.json');
   const envelope = { schema: 'knitli-reviewer-producer:v1', executionId: randomUUID(), provenance: 'unverified', roundCompletion: 'unknown',
-    status: 'failed', applicability: 'unknown', failure: null,
+    status: 'failed', applicability: 'unknown', failure: null, ...(attempt ? { attempt } : {}),
     configured: { repository, pullRequest, expectedHead, expectedBase, model }, snapshot: null, completion: null };
   let stage = 'capture_failed';
   try {
@@ -96,6 +112,7 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
     const snapshotBytes = boundedFile(snapshotPath, PRODUCER_LIMITS.snapshotBytes);
     const snapshot = validateSnapshot(snapshotBytes, captured.artifactSha256);
     if (captured.artifactPath !== snapshotPath || snapshot.manifest.repository.fullName !== repository || snapshot.manifest.pullRequest !== pullRequest
+      || (attempt && snapshot.manifest.repository.id !== attempt.repositoryId)
       || snapshot.manifest.head.sha !== expectedHead || snapshot.manifest.base.sha !== expectedBase) fail('snapshot_binding');
     envelope.snapshot = { file: 'snapshot.json', sha256: digest(snapshotBytes), bytes: snapshotBytes.length, manifestSha256: snapshot.manifestSha256 };
     stage = 'candidate_unavailable';
@@ -136,6 +153,36 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
   for (const artifact of [envelope.snapshot, envelope.completion]) if (artifact) chmodSync(join(outputDirectory, artifact.file), 0o444);
   publish(join(outputDirectory, 'envelope.json'), envelope);
   return envelope;
+}
+
+/** The caller must authenticate this envelope digest through a separate host channel. */
+export function readProducerBundle(directory, expectedEnvelopeSha256) {
+  const envelopeBytes = boundedFile(join(directory, 'envelope.json'), PRODUCER_LIMITS.envelopeBytes);
+  if (typeof expectedEnvelopeSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expectedEnvelopeSha256)
+    || digest(envelopeBytes) !== expectedEnvelopeSha256) fail('envelope_digest');
+  let envelope;
+  try { envelope = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(envelopeBytes)); } catch { fail('envelope_invalid'); }
+  if (!exact(envelope, ['schema', 'executionId', 'provenance', 'roundCompletion', 'status', 'applicability', 'failure', 'configured', 'snapshot', 'completion', 'attempt'])
+    || envelope.schema !== 'knitli-reviewer-producer:v1' || !uuid(envelope.executionId)
+    || envelope.provenance !== 'unverified' || envelope.roundCompletion !== 'unknown'
+    || envelope.status !== 'completed' || envelope.failure !== null
+    || !['unchanged-observed', 'stale', 'unknown'].includes(envelope.applicability)) fail('envelope_invalid');
+  const attempt = captureAttemptContext(envelope.attempt);
+  const snapshotBytes = boundedFile(join(directory, 'snapshot.json'), PRODUCER_LIMITS.snapshotBytes);
+  const snapshot = validateSnapshot(snapshotBytes, envelope.snapshot?.sha256);
+  if (!exact(envelope.snapshot, ['file', 'sha256', 'bytes', 'manifestSha256']) || envelope.snapshot.file !== 'snapshot.json'
+    || envelope.snapshot.bytes !== snapshotBytes.length || envelope.snapshot.manifestSha256 !== snapshot.manifestSha256
+    || attempt.repository !== snapshot.manifest.repository.fullName || attempt.repositoryId !== snapshot.manifest.repository.id
+    || !exact(envelope.configured, ['repository', 'pullRequest', 'expectedHead', 'expectedBase', 'model'])
+    || envelope.configured.repository !== attempt.repository || envelope.configured.pullRequest !== snapshot.manifest.pullRequest
+    || envelope.configured.expectedHead !== snapshot.manifest.head.sha || envelope.configured.expectedBase !== snapshot.manifest.base.sha
+    || typeof envelope.configured.model !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(envelope.configured.model)) fail('snapshot_binding');
+  const completionBytes = boundedFile(join(directory, 'completion.json'), PRODUCER_LIMITS.completionBytes);
+  const completion = validateCompletion(completionBytes, envelope.snapshot.sha256, snapshot);
+  if (!exact(envelope.completion, ['file', 'sha256', 'bytes', 'sessionId', 'terminalUuid']) || envelope.completion.file !== 'completion.json'
+    || envelope.completion.sha256 !== digest(completionBytes) || envelope.completion.bytes !== completionBytes.length
+    || envelope.completion.sessionId !== completion.sessionId || envelope.completion.terminalUuid !== completion.terminalUuid) fail('completion_invalid');
+  return { envelope, attempt };
 }
 
 export async function main(args) {
