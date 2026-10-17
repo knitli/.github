@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, stat, access } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureSnapshot } from './reviewer-input-snapshot.mjs';
-import { SDK_VERSION } from './reviewer-completion-driver.mjs';
+import { SDK_VERSION, runReview } from './reviewer-completion-driver.mjs';
 import { runProducer } from './reviewer-producer-run.mjs';
 
 let root, repo, candidate;
@@ -35,7 +35,8 @@ async function writeReceipt(args, mutate = () => {}) {
   const flags = flagsOf(args);
   const snapshot = JSON.parse(await readFile(flags['--snapshot'], 'utf8'));
   const receipt = { schema: 'knitli-reviewer-completion:v1', status: 'completed',
-    provider: 'claude-agent-sdk', sdkVersion: SDK_VERSION, sessionId: randomUUID(), terminalUuid: randomUUID(),
+    provider: 'claude-agent-sdk', sdkVersion: SDK_VERSION,
+    requestedModel: flags['--model'], resolvedModel: flags['--model'], usageModels: [flags['--model']], sessionId: randomUUID(), terminalUuid: randomUUID(),
     snapshotSha256: flags['--snapshot-sha256'], manifestSha256: snapshot.manifestSha256,
     coverage: { pages: 4, requiredPages: 4, files: snapshot.files.length },
     report: { schema: 'knitli-review-report:v1', snapshotSha256: flags['--snapshot-sha256'], findings: [], limitations: [] } };
@@ -44,7 +45,7 @@ async function writeReceipt(args, mutate = () => {}) {
   return { receiptPath: flags['--receipt'], snapshotSha256: flags['--snapshot-sha256'], status: 'completed' };
 }
 function options(overrides = {}) {
-  return { sdkDirectory: '/trusted/sdk', claudeBinary: '/trusted/claude', model: 'claude-test', repository: 'knitli/demo', pullRequest: 7, expectedHead: candidate.head.sha,
+  return { sdkDirectory: '/trusted/sdk', claudeBinary: '/trusted/claude', model: 'claude-sonnet-4-6', repository: 'knitli/demo', pullRequest: 7, expectedHead: candidate.head.sha,
     expectedBase: candidate.base.sha, outputDirectory: join(root, randomUUID()),
     readCandidate: async () => structuredClone(candidate),
     capture: input => captureSnapshot({ ...input, localRepository: repo }),
@@ -253,7 +254,7 @@ test('actual CLI acquisition child receives only its token and closed host confi
   const outputDirectory = join(root, randomUUID());
   assert.throws(() => execFileSync(process.execPath, [fileURLToPath(new URL('./reviewer-producer-run.mjs', import.meta.url)),
     '--repository', 'knitli/demo', '--pull-request', '7', '--expected-head', candidate.head.sha, '--expected-base', candidate.base.sha,
-    '--output-directory', outputDirectory, '--sdk-directory', '/unused/sdk', '--claude-binary', '/unused/claude', '--gh-binary', executable, '--model', 'claude-test'],
+    '--output-directory', outputDirectory, '--sdk-directory', '/unused/sdk', '--claude-binary', '/unused/claude', '--gh-binary', executable, '--model', 'claude-sonnet-4-6'],
   { env: { PATH: '/usr/bin:/bin', GH_TOKEN: 'synthetic-github-token', ANTHROPIC_API_KEY: 'synthetic-model-key', UNRELATED_SECRET: 'synthetic-other' }, stdio: ['ignore', 'pipe', 'pipe'] }), { status: 1 });
   const env = JSON.parse(await readFile(observed, 'utf8'));
   assert.equal(env.GH_TOKEN, 'synthetic-github-token');
@@ -292,4 +293,71 @@ test('findings cannot point to phantom trailing-newline lines', async () => {
     receipt.report.findings.push({ path: 'tracked.txt', side: 'after', line: 2, severity: 'low', message: 'not a real source line' });
   }) });
   assert.equal((await runProducer(input)).status, 'failed');
+});
+
+test('actual offline runReview receipt composes with producer and retains model identity', async () => {
+  const input = options({ runDriver: async args => {
+    const flags = flagsOf(args);
+    let read;
+    const sdk = {
+      tool(_name, _description, _schema, handler) { read = handler; return {}; },
+      createSdkMcpServer(value) { return value; },
+      query({ options: config }) {
+        const stream = (async function* () {
+          yield { type: 'system', subtype: 'init', session_id: config.sessionId,
+            model: config.model, tools: ['mcp__frozen__read_next'] };
+          let remaining;
+          do { remaining = JSON.parse((await read({})).content[0].text).remaining; } while (remaining);
+          yield { type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
+            modelUsage: { [config.model]: {} }, permission_denials: [], session_id: config.sessionId,
+            uuid: randomUUID(), result: JSON.stringify({ schema: 'knitli-review-report:v1',
+              snapshotSha256: flags['--snapshot-sha256'], findings: [], limitations: ['Offline synthetic SDK stream only'] }) };
+        })();
+        stream.close = () => {};
+        return stream;
+      },
+    };
+    const receipt = await runReview({ bytes: await readFile(flags['--snapshot']),
+      expectedSha256: flags['--snapshot-sha256'], sdk, runtimeDirectory: root,
+      binaryPath: '/never-invoked/claude', apiKey: 'synthetic-unused-key', model: flags['--model'] });
+    await writeFile(flags['--receipt'], JSON.stringify(receipt));
+    return { receiptPath: flags['--receipt'], snapshotSha256: flags['--snapshot-sha256'], status: 'completed' };
+  } });
+  const result = await runProducer(input);
+  assert.equal(result.status, 'completed');
+  for (const key of ['requestedModel', 'resolvedModel']) assert.equal(result.completion[key], input.model);
+  assert.deepEqual(result.completion.usageModels, [input.model]);
+  await committed(input, result);
+});
+
+test('rejects missing, mismatched, or extra receipt model identities', async t => {
+  const cases = {
+    missingRequested: receipt => { delete receipt.requestedModel; },
+    missingResolved: receipt => { delete receipt.resolvedModel; },
+    missingUsage: receipt => { delete receipt.usageModels; },
+    wrongRequested: receipt => { receipt.requestedModel = 'claude-opus-4-6'; },
+    wrongResolved: receipt => { receipt.resolvedModel = 'claude-opus-4-6'; },
+    wrongUsage: receipt => { receipt.usageModels = ['claude-opus-4-6']; },
+    extraUsage: receipt => { receipt.usageModels.push('claude-opus-4-6'); },
+    duplicateUsage: receipt => { receipt.usageModels.push(receipt.resolvedModel); },
+    emptyUsage: receipt => { receipt.usageModels = []; },
+    malformedUsage: receipt => { receipt.usageModels = { 0: receipt.resolvedModel }; },
+  };
+  for (const [name, mutate] of Object.entries(cases)) await t.test(name, async () => {
+    const input = options({ runDriver: args => writeReceipt(args, mutate) });
+    const result = await runProducer(input);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure, 'completion_invalid');
+    assert.equal(result.completion, null);
+    await assert.rejects(access(join(input.outputDirectory, 'completion.json')));
+    await committed(input, result);
+  });
+});
+
+test('rejects model aliases before capture', async () => {
+  for (const model of ['claude-test', 'sonnet', 'claude-sonnet-latest']) {
+    let called = false;
+    await assert.rejects(runProducer(options({ model, capture: async () => { called = true; } })));
+    assert.equal(called, false);
+  }
 });

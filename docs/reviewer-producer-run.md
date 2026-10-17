@@ -8,7 +8,11 @@ post findings, claim authenticated admission, or change cloud attention state.
 
 Every envelope says `provenance: unverified` and `roundCompletion: unknown`,
 including when `status: completed`. Here completed means the local host accepted
-the existing driver's completion artifact. Configured repository/candidate/model
+the existing driver's completion artifact. The producer requires the explicit
+versioned requested model to match both the resolved model and the sole usage
+model in that receipt, and retains all three fields in its completion summary.
+Missing, mismatched, or additional model identities fail closed.
+Configured repository/candidate/model
 values, a local execution UUID, and self-consistent hashes do not establish
 GitHub workflow identity, installation identity, trusted policy, admission order,
 provider acceptance, or externally authenticated provenance. No query-init event

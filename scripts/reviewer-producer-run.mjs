@@ -47,10 +47,12 @@ function matches(candidate, manifest) {
       return observed?.sha === fixed.sha && observed.repo?.id === fixed.repositoryId && observed.repo?.full_name === fixed.repository;
     });
 }
-function validateCompletion(bytes, snapshotDigest, snapshot) {
+function validateCompletion(bytes, snapshotDigest, snapshot, model) {
   let value; try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { fail('completion_invalid'); }
-  if (!exact(value, ['schema', 'status', 'provider', 'sdkVersion', 'sessionId', 'terminalUuid', 'snapshotSha256', 'manifestSha256', 'coverage', 'report'])
+  if (!exact(value, ['schema', 'status', 'provider', 'sdkVersion', 'requestedModel', 'resolvedModel', 'usageModels', 'sessionId', 'terminalUuid', 'snapshotSha256', 'manifestSha256', 'coverage', 'report'])
     || value.schema !== 'knitli-reviewer-completion:v1' || value.status !== 'completed' || value.provider !== 'claude-agent-sdk'
+    || value.requestedModel !== model || value.resolvedModel !== model
+    || !Array.isArray(value.usageModels) || value.usageModels.length !== 1 || value.usageModels[0] !== model
     || value.sdkVersion !== SDK_VERSION || !uuid(value.sessionId) || !uuid(value.terminalUuid)
     || value.snapshotSha256 !== snapshotDigest || value.manifestSha256 !== snapshot.manifestSha256) fail('completion_invalid');
   const coverage = value.coverage;
@@ -80,7 +82,8 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
     || !Number.isSafeInteger(pullRequest) || pullRequest < 1 || !hex(expectedHead) || !hex(expectedBase)
     || typeof outputDirectory !== 'string' || !isAbsolute(outputDirectory) || typeof readCandidate !== 'function'
     || typeof capture !== 'function' || typeof runDriver !== 'function' || typeof sdkDirectory !== 'string' || !isAbsolute(sdkDirectory)
-    || typeof claudeBinary !== 'string' || !isAbsolute(claudeBinary) || typeof model !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(model)) fail('arguments');
+    || typeof claudeBinary !== 'string' || !isAbsolute(claudeBinary) || typeof model !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(model)
+    || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+$/.test(model)) fail('arguments');
   // Exclusive directory reservation avoids overwriting or reusing another attempt.
   mkdirSync(outputDirectory, { mode: 0o700 });
   const snapshotPath = join(outputDirectory, 'snapshot.json'), completionPath = join(outputDirectory, 'completion.json');
@@ -106,11 +109,12 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
     if (!exact(result, ['receiptPath', 'snapshotSha256', 'status']) || result.receiptPath !== completionPath
       || result.snapshotSha256 !== envelope.snapshot.sha256 || result.status !== 'completed') fail('completion_invalid');
     const completionBytes = boundedFile(completionPath, PRODUCER_LIMITS.completionBytes);
-    const completed = validateCompletion(completionBytes, envelope.snapshot.sha256, snapshot);
+    const completed = validateCompletion(completionBytes, envelope.snapshot.sha256, snapshot, model);
     // Retain only a verified full snapshot/receipt pair; neither file may drift during the driver.
     if (digest(boundedFile(snapshotPath, PRODUCER_LIMITS.snapshotBytes)) !== envelope.snapshot.sha256) fail('snapshot_changed');
     envelope.completion = { file: 'completion.json', sha256: digest(completionBytes), bytes: completionBytes.length,
-      sessionId: completed.sessionId, terminalUuid: completed.terminalUuid };
+      sessionId: completed.sessionId, terminalUuid: completed.terminalUuid, requestedModel: completed.requestedModel,
+      resolvedModel: completed.resolvedModel, usageModels: completed.usageModels };
     envelope.status = 'completed';
     try { envelope.applicability = matches(await readCandidate(), snapshot.manifest) ? 'unchanged-observed' : 'stale'; }
     catch { envelope.applicability = 'unknown'; }
