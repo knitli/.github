@@ -547,3 +547,38 @@ test('successful SDK step cannot override failed job or unfinished/failed run at
     assert.equal(evidence.roundCompletion, 'unknown');
   }
 });
+
+
+test('composition revalidates model summary and receipt against configured model', async t => {
+  const changes = {
+    summaryRequested: h => { h.envelope.completion.requestedModel = 'claude-opus-4-6'; },
+    summaryResolved: h => { h.envelope.completion.resolvedModel = 'claude-opus-4-6'; },
+    summaryUsage: h => { h.envelope.completion.usageModels = ['claude-opus-4-6']; },
+    summaryAdditionalUsage: h => { h.envelope.completion.usageModels.push('claude-opus-4-6'); },
+    configuredModel: h => { h.envelope.configured.model = 'claude-opus-4-6'; },
+    configuredAlias: h => { h.envelope.configured.model = 'sonnet'; },
+    receiptModel: async h => {
+      const file = join(h.input.outputDirectory, 'completion.json');
+      const receipt = JSON.parse(await readFile(file));
+      receipt.requestedModel = receipt.resolvedModel = 'claude-opus-4-6';
+      receipt.usageModels = ['claude-opus-4-6'];
+      const bytes = Buffer.from(JSON.stringify(receipt));
+      const { chmod } = await import('node:fs/promises'); await chmod(file, 0o600);
+      await writeFile(file, bytes);
+      Object.assign(h.envelope.completion, { sha256: hashBytes(bytes), bytes: bytes.length,
+        requestedModel: receipt.requestedModel, resolvedModel: receipt.resolvedModel, usageModels: receipt.usageModels });
+    },
+  };
+  for (const [name, change] of Object.entries(changes)) await t.test(name, async () => {
+    const h = await evidenceFixture();
+    await change(h);
+    const file = join(h.input.outputDirectory, 'envelope.json');
+    const { chmod } = await import('node:fs/promises'); await chmod(file, 0o600);
+    const bytes = Buffer.from(JSON.stringify(h.envelope));
+    await writeFile(file, bytes);
+    h.handoff.envelopeSha256 = hashBytes(bytes);
+    await assert.rejects(composeAttemptEvidence(h.composeOptions), /completion_invalid|snapshot_binding/);
+    assert.equal(h.calls.length, 0);
+    await assert.rejects(access(h.composeOptions.outputPath));
+  });
+});

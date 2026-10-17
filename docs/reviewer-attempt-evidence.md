@@ -54,7 +54,9 @@ execution. No existing workflow uses the new step in this change.
 
 The composer first verifies the independently supplied envelope digest, complete
 attempt identity, snapshot/manifest/blob hashes, completion digest/session/report
-and fixed filenames/bounds. It repeats retained-byte validation after platform
+and fixed filenames/bounds. It revalidates the explicit configured model against
+requested/resolved/sole-usage model identities in the completion receipt and its
+envelope summary; refreshing a local digest cannot bypass those checks. It repeats retained-byte validation after platform
 acquisition, then atomically publishes a separate mode-0444 artifact without
 replacement. Original bundle artifacts are not modified.
 
@@ -90,11 +92,13 @@ authenticated artifact/API acquisition, and qualification of that complete path.
 This slice intentionally does not install those capabilities. No successful
 provider execution or externally authenticated hosted provenance is claimed.
 
-Verified locally on 2026-10-17: all four reviewer suites passed (108 tests, zero
-skips) with the cached SDK qualifier enabled. Eleven causal mutants independently
-failed assertions: attempt identity, run-attempt identity, sibling-job selection,
-legacy-action substitution, complete pagination, step/job/run terminal fences,
-independent envelope digest, final-byte revalidation, and stale applicability.
-Source was restored before the final green run. Node syntax checks, scoped
-Oxlint default correctness checks, and `git diff --check` passed. These are local
-offline results, not hosted provenance or successful provider qualification.
+Verified after the prerequisite merges on 2026-10-17: all four reviewer suites
+passed (147 tests, zero skips), including the cached SDK qualifier. The original
+composition reader failed against the updated producer's model-bound receipt;
+the compatible reader passes. Two causal mutants removing model-summary checks
+or trusting the receipt's model instead of the configured model failed the new
+composition assertions. The earlier eleven attempt/platform/digest/freshness
+mutants remain historical evidence; they were not rerun for this compatibility
+change. Source was restored before the final green run. Node syntax checks,
+scoped Oxlint checks, and `git diff --check` passed. These are local offline
+results, not hosted provenance or successful provider qualification.

@@ -176,12 +176,16 @@ export function readProducerBundle(directory, expectedEnvelopeSha256) {
     || !exact(envelope.configured, ['repository', 'pullRequest', 'expectedHead', 'expectedBase', 'model'])
     || envelope.configured.repository !== attempt.repository || envelope.configured.pullRequest !== snapshot.manifest.pullRequest
     || envelope.configured.expectedHead !== snapshot.manifest.head.sha || envelope.configured.expectedBase !== snapshot.manifest.base.sha
-    || typeof envelope.configured.model !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(envelope.configured.model)) fail('snapshot_binding');
+    || typeof envelope.configured.model !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(envelope.configured.model)
+    || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+$/.test(envelope.configured.model)) fail('snapshot_binding');
   const completionBytes = boundedFile(join(directory, 'completion.json'), PRODUCER_LIMITS.completionBytes);
-  const completion = validateCompletion(completionBytes, envelope.snapshot.sha256, snapshot);
-  if (!exact(envelope.completion, ['file', 'sha256', 'bytes', 'sessionId', 'terminalUuid']) || envelope.completion.file !== 'completion.json'
+  const completion = validateCompletion(completionBytes, envelope.snapshot.sha256, snapshot, envelope.configured.model);
+  if (!exact(envelope.completion, ['file', 'sha256', 'bytes', 'sessionId', 'terminalUuid', 'requestedModel', 'resolvedModel', 'usageModels']) || envelope.completion.file !== 'completion.json'
     || envelope.completion.sha256 !== digest(completionBytes) || envelope.completion.bytes !== completionBytes.length
-    || envelope.completion.sessionId !== completion.sessionId || envelope.completion.terminalUuid !== completion.terminalUuid) fail('completion_invalid');
+    || envelope.completion.sessionId !== completion.sessionId || envelope.completion.terminalUuid !== completion.terminalUuid
+    || envelope.completion.requestedModel !== completion.requestedModel || envelope.completion.resolvedModel !== completion.resolvedModel
+    || !Array.isArray(envelope.completion.usageModels) || envelope.completion.usageModels.length !== 1
+    || envelope.completion.usageModels[0] !== completion.resolvedModel) fail('completion_invalid');
   return { envelope, attempt };
 }
 
