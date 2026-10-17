@@ -35,6 +35,11 @@ name: Claude PR Reviewer
 on:
   workflow_call:
     inputs:
+      host_qualification:
+        description: 'Run only the provider-free host publication and fresh signing qualification'
+        required: false
+        type: boolean
+        default: false
       review_alias:
         description: 'Comment mention that triggers an on-demand review'
         required: false
@@ -78,6 +83,7 @@ jobs:
   # so a post-trigger edit cannot change what the model sees. See the README,
   # "Agent input gating", for the full reasoning and the known gaps.
   sanitize:
+    if: ${{ !inputs.host_qualification }}
     name: Scan agent inputs
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -150,12 +156,13 @@ jobs:
     # Auto-review on PR events; on-demand review when a comment mentions the
     # review alias on a PR (issue_comment) or on a diff line (review comment).
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request != null &&
-        contains(github.event.comment.body, inputs.review_alias)) ||
-      (github.event_name == 'pull_request_review_comment' &&
-        contains(github.event.comment.body, inputs.review_alias))
+      !inputs.host_qualification && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          contains(github.event.comment.body, inputs.review_alias)) ||
+        (github.event_name == 'pull_request_review_comment' &&
+          contains(github.event.comment.body, inputs.review_alias)))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -448,7 +455,7 @@ jobs:
   execution-receipt:
     name: Retain reviewer execution evidence
     needs: [sanitize, review]
-    if: always()
+    if: ${{ always() && !inputs.host_qualification }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -497,3 +504,186 @@ jobs:
           path: ${{ runner.temp }}/reviewer-execution-receipt.json
           if-no-files-found: error
           retention-days: 30
+
+  # No existing provider job runs in this mode. No caller/PR code or secrets enter it.
+  qualification-producer:
+    if: ${{ inputs.host_qualification }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      attempt-json: ${{ steps.capture.outputs.attemptJson }}
+      envelope-sha256: ${{ steps.capture.outputs.envelopeSha256 }}
+    env:
+      QUAL_ENABLED: ${{ inputs.host_qualification }}
+      QUAL_REPOSITORY: ${{ github.repository }}
+      QUAL_REPOSITORY_ID: ${{ github.repository_id }}
+      QUAL_VISIBILITY: ${{ github.event.repository.private && 'private' || 'public' }}
+      QUAL_EVENT: ${{ github.event_name }}
+      QUAL_REF: ${{ github.ref }}
+      QUAL_PROTECTED: ${{ github.ref_protected }}
+      QUAL_CALLER_WORKFLOW: ${{ github.workflow_ref }}
+      QUAL_SOURCE_SHA: ${{ github.sha }}
+      QUAL_RUN_ID: ${{ github.run_id }}
+      QUAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Reject unsupported qualification context before loading code
+        shell: bash
+        env:
+          QUAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          QUAL_WORKFLOW_REF: ${{ job.workflow_ref }}
+          QUAL_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          QUAL_RUNNER: ${{ runner.environment }}
+          QUAL_OS: ${{ runner.os }}
+          QUAL_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_ACTIONS" == true && "$QUAL_ENABLED" == true ]] || exit 1
+          [[ "$QUAL_REPOSITORY" == knitli/knitli-site && "$QUAL_REPOSITORY_ID" == 1058277548 ]] || exit 1
+          [[ "$QUAL_VISIBILITY" == private && "$QUAL_EVENT" == workflow_dispatch ]] || exit 1
+          [[ "$QUAL_REF" == refs/heads/main && "$QUAL_PROTECTED" == true ]] || exit 1
+          [[ "$QUAL_CALLER_WORKFLOW" == knitli/knitli-site/.github/workflows/reviewer-host-qualification.yml@refs/heads/main ]] || exit 1
+          [[ "$QUAL_RUNNER" == github-hosted && "$QUAL_OS" == Linux && "$QUAL_ARCH" == X64 ]] || exit 1
+          [[ "$QUAL_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$QUAL_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$QUAL_WORKFLOW_REF" == "knitli/.github/.github/workflows/claude-pr-reviewer.yml@$QUAL_WORKFLOW_SHA" ]] || exit 1
+          for value in "$QUAL_RUN_ID" "$QUAL_RUN_ATTEMPT" "$QUAL_CHECK_RUN_ID"; do
+            [[ "$value" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          done
+      - name: Load only the defining immutable reusable workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: knitli/.github
+          ref: ${{ job.workflow_sha }}
+          path: reviewer-host
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Install pinned host Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Synthetic reviewer handoff qualification
+        id: capture
+        env:
+          QUAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          QUAL_WORKFLOW_REF: ${{ job.workflow_ref }}
+          QUAL_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          QUAL_RUNNER: ${{ runner.environment }}
+          QUAL_OS: ${{ runner.os }}
+          QUAL_ARCH: ${{ runner.arch }}
+        run: node reviewer-host/scripts/reviewer-host-source.mjs produce
+      - name: Retain exact bounded producer bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reviewer-host-producer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/reviewer-host-producer/bundle/completion.json
+            ${{ runner.temp }}/reviewer-host-producer/bundle/envelope.json
+            ${{ runner.temp }}/reviewer-host-producer/bundle/snapshot.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+  qualification-sealer:
+    if: ${{ inputs.host_qualification }}
+    needs: qualification-producer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      QUAL_ENABLED: ${{ inputs.host_qualification }}
+      QUAL_REPOSITORY: ${{ github.repository }}
+      QUAL_REPOSITORY_ID: ${{ github.repository_id }}
+      QUAL_VISIBILITY: ${{ github.event.repository.private && 'private' || 'public' }}
+      QUAL_EVENT: ${{ github.event_name }}
+      QUAL_REF: ${{ github.ref }}
+      QUAL_PROTECTED: ${{ github.ref_protected }}
+      QUAL_CALLER_WORKFLOW: ${{ github.workflow_ref }}
+      QUAL_SOURCE_SHA: ${{ github.sha }}
+      QUAL_RUN_ID: ${{ github.run_id }}
+      QUAL_RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Reject unsupported qualification context before loading code
+        shell: bash
+        env:
+          QUAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          QUAL_WORKFLOW_REF: ${{ job.workflow_ref }}
+          QUAL_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          QUAL_RUNNER: ${{ runner.environment }}
+          QUAL_OS: ${{ runner.os }}
+          QUAL_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_ACTIONS" == true && "$QUAL_ENABLED" == true ]] || exit 1
+          [[ "$QUAL_REPOSITORY" == knitli/knitli-site && "$QUAL_REPOSITORY_ID" == 1058277548 ]] || exit 1
+          [[ "$QUAL_VISIBILITY" == private && "$QUAL_EVENT" == workflow_dispatch ]] || exit 1
+          [[ "$QUAL_REF" == refs/heads/main && "$QUAL_PROTECTED" == true ]] || exit 1
+          [[ "$QUAL_CALLER_WORKFLOW" == knitli/knitli-site/.github/workflows/reviewer-host-qualification.yml@refs/heads/main ]] || exit 1
+          [[ "$QUAL_RUNNER" == github-hosted && "$QUAL_OS" == Linux && "$QUAL_ARCH" == X64 ]] || exit 1
+          [[ "$QUAL_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$QUAL_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$QUAL_WORKFLOW_REF" == "knitli/.github/.github/workflows/claude-pr-reviewer.yml@$QUAL_WORKFLOW_SHA" ]] || exit 1
+          for value in "$QUAL_RUN_ID" "$QUAL_RUN_ATTEMPT" "$QUAL_CHECK_RUN_ID"; do
+            [[ "$value" =~ ^[1-9][0-9]{0,19}$ ]] || exit 1
+          done
+      - name: Load only the defining immutable reusable workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: knitli/.github
+          ref: ${{ job.workflow_sha }}
+          path: reviewer-host
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Install pinned host Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Seal only host callback outputs
+        id: handoff
+        env:
+          QUAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          QUAL_WORKFLOW_REF: ${{ job.workflow_ref }}
+          QUAL_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          QUAL_RUNNER: ${{ runner.environment }}
+          QUAL_OS: ${{ runner.os }}
+          QUAL_ARCH: ${{ runner.arch }}
+          QUAL_ATTEMPT_JSON: ${{ needs.qualification-producer.outputs.attempt-json }}
+          QUAL_ENVELOPE_SHA256: ${{ needs.qualification-producer.outputs.envelope-sha256 }}
+        run: node reviewer-host/scripts/reviewer-host-source.mjs seal
+      - name: Attest host-only reviewer handoff
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: reviewer-host-handoff.json
+          subject-digest: sha256:${{ steps.handoff.outputs.sha256 }}
+      - name: Retain only the successful action's bounded attestation bundle
+        env:
+          QUAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          QUAL_WORKFLOW_REF: ${{ job.workflow_ref }}
+          QUAL_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          QUAL_RUNNER: ${{ runner.environment }}
+          QUAL_OS: ${{ runner.os }}
+          QUAL_ARCH: ${{ runner.arch }}
+          QUAL_HANDOFF_SHA256: ${{ steps.handoff.outputs.sha256 }}
+          QUAL_ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: node reviewer-host/scripts/reviewer-host-source.mjs retain
+      - name: Retain exact sealed handoff and attestation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reviewer-host-sealed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/reviewer-host-sealed/reviewer-host-handoff.json
+            ${{ runner.temp }}/reviewer-host-sealed/attestation.sigstore.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
