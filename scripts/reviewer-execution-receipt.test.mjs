@@ -154,3 +154,24 @@ test('optional PR lookup failure preserves acquired attempt evidence', () => {
     assert.equal(receipt.execution, 'failed');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
+
+test('failed action stays nonblocking without masking the receipt step conclusion', () => {
+  const source = readFileSync(new URL('../.github/workflows/claude-pr-reviewer.yml', import.meta.url), 'utf8');
+  const review = source.split('\n  review:\n')[1].split('\n  execution-receipt:')[0];
+  const action = review.split(`      - name: ${stepName}\n`)[1].split('\n      - name:')[0];
+  assert.ok(action, 'the receipt-producing action must exist');
+  assert.match(review.split('    steps:')[0], /^    continue-on-error: true$/m);
+  assert.match(source.split('\n  execution-receipt:')[1], /^    if: always\(\)$/m);
+  const failedAction = spawnSync(process.execPath, ['-e', 'process.exit(23)']);
+  assert.equal(failedAction.status, 23);
+  const outcome = failedAction.status === 0 ? 'success' : 'failure';
+  // GitHub applies step continue-on-error before publishing step conclusion.
+  // Exercise that documented transformation using the actual workflow setting.
+  const conclusion = /^        continue-on-error: true$/m.test(action) ? 'success' : outcome;
+  const result = inspect([{ ...job, name: 'unrelated display label',
+    steps: [{ ...job.steps[0], conclusion }] }]);
+  assert.equal(result.execution, 'failed');
+  assert.equal(result.step.conclusion, 'failure');
+  assert.equal(result.reviewCompletion, 'unknown');
+  assert.doesNotMatch(action, /^        continue-on-error:/m);
+});

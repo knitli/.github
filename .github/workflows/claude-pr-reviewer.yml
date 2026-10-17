@@ -331,7 +331,7 @@ jobs:
         uses: anthropics/claude-code-action@f1bd27ca5b54584506e40e17884d90bdaaa1a9b3
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        continue-on-error: true
+        # Keep failure visible in the Runs API; job-level tolerance is nonblocking.
         with:
           bot_id: 142185322
           bot_name: >-
