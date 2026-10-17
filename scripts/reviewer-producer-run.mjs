@@ -53,6 +53,7 @@ function publish(path, value) {
     try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
     linkSync(file, path);
   } finally { rmSync(stage, { recursive: true, force: true }); }
+  return digest(bytes);
 }
 function matches(candidate, manifest) {
   return candidate?.number === manifest.pullRequest && candidate.title === manifest.description.title
@@ -91,9 +92,10 @@ function validateCompletion(bytes, snapshotDigest, snapshot, model) {
 
 /** Local host orchestration, not authenticated provider admission or cloud authority. */
 export async function runProducer({ repository, pullRequest, expectedHead, expectedBase, outputDirectory, readCandidate,
-  capture = captureSnapshot, runDriver = driverMain, sdkDirectory, claudeBinary, model, attemptContext } = {}) {
+  capture = captureSnapshot, runDriver = driverMain, sdkDirectory, claudeBinary, model, attemptContext, onPublished } = {}) {
   const attempt = attemptContext === undefined ? null : captureAttemptContext(attemptContext);
   if (attempt && attempt.repository !== repository) fail('attempt_context');
+  if (onPublished !== undefined && (typeof onPublished !== 'function' || !attempt)) fail('handoff_arguments');
   if (typeof repository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || repository.split('/').some(part => part === '.' || part === '..')
     || !Number.isSafeInteger(pullRequest) || pullRequest < 1 || !hex(expectedHead) || !hex(expectedBase)
     || typeof outputDirectory !== 'string' || !isAbsolute(outputDirectory) || typeof readCandidate !== 'function'
@@ -151,7 +153,12 @@ export async function runProducer({ repository, pullRequest, expectedHead, expec
     }
   }
   for (const artifact of [envelope.snapshot, envelope.completion]) if (artifact) chmodSync(join(outputDirectory, artifact.file), 0o444);
-  publish(join(outputDirectory, 'envelope.json'), envelope);
+  const envelopeSha256 = publish(join(outputDirectory, 'envelope.json'), envelope);
+  if (envelope.status === 'completed' && onPublished !== undefined) {
+    // Publication precedes handoff; a failed host callback never rolls back or retries it.
+    try { await onPublished(Object.freeze({ attempt, envelopeSha256 })); }
+    catch { fail('handoff_failed'); }
+  }
   return envelope;
 }
 
