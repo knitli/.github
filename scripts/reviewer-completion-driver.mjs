@@ -133,6 +133,8 @@ export async function runReview({ bytes, expectedSha256, sdk, runtimeDirectory, 
   if (!isAbsolute(runtimeDirectory) || !isAbsolute(binaryPath) || !text(apiKey) || !apiKey || !/^[A-Za-z0-9_.-]{1,100}$/.test(model)
     || !integer(timeoutMs) || !timeoutMs || timeoutMs > 300_000 || !integer(maxTurns) || !maxTurns || maxTurns > 128
     || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(sessionId)) fail('options');
+  // Require an explicit versioned Claude ID; do not certify short or latest aliases.
+  if (!/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]+$/.test(model)) fail('model_identity');
   const pages = pagesFor(snapshot); let cursor = 0, closed = false, poisoned = false;
   const read = sdk.tool('read_next', 'Read the next mandatory page of frozen review input. Call until remaining is zero.', {}, async args => {
     if (closed || !exact(args, []) || cursor >= pages.length) { poisoned = true; return { isError: true, content: [{ type: 'text', text: 'read refused' }] }; }
@@ -156,15 +158,19 @@ export async function runReview({ bytes, expectedSha256, sdk, runtimeDirectory, 
   try {
     const work = async () => {
       stream = sdk.query({ prompt: `Review frozen snapshot ${expectedSha256}. Read all ${pages.length} pages, then return the report.`, options });
-      let initialized = false, terminal, messages = 0, outputBytes = 0;
+      let initialized = false, resolvedModel, terminal, messages = 0, outputBytes = 0;
       for await (const message of stream) {
         if (++messages > 4096 || (outputBytes += Buffer.byteLength(JSON.stringify(message))) > 8 * 1024 * 1024) fail('stream_limit');
         if (!message || message.session_id !== sessionId || terminal) fail('session_or_terminal');
         if (message.type === 'system' && message.subtype === 'init') {
           if (initialized || !Array.isArray(message.tools) || message.tools.some(name => name !== 'mcp__frozen__read_next')) fail('init');
+          if (!text(message.model) || !message.model || message.model !== model) fail('model_identity');
+          resolvedModel = message.model;
           initialized = true;
         } else if (!initialized) fail('missing_init');
+        if (message.type === 'system' && message.subtype === 'model_refusal_fallback') fail('model_identity');
         if (message.type === 'result') {
+          if (!exact(message.modelUsage, [resolvedModel])) fail('model_identity');
           closed = true;
           if (message.subtype !== 'success' || message.is_error !== false || !Array.isArray(message.permission_denials)
             || message.permission_denials.length || message.terminal_reason !== 'completed' || message.deferred_tool_use
@@ -175,7 +181,7 @@ export async function runReview({ bytes, expectedSha256, sdk, runtimeDirectory, 
       }
       if (!terminal || poisoned) fail('missing_terminal');
       return { schema: 'knitli-reviewer-completion:v1', status: 'completed', provider: 'claude-agent-sdk', sdkVersion: SDK_VERSION,
-        sessionId, terminalUuid: terminal.uuid, snapshotSha256: expectedSha256, manifestSha256: snapshot.manifestSha256,
+        requestedModel: model, resolvedModel, usageModels: [resolvedModel], sessionId, terminalUuid: terminal.uuid, snapshotSha256: expectedSha256, manifestSha256: snapshot.manifestSha256,
         coverage: { pages: cursor, requiredPages: pages.length, files: snapshot.files.length }, report: terminal.report };
     };
     return await Promise.race([work(), new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Reviewer completion refused: timeout')); }, timeoutMs); })]);

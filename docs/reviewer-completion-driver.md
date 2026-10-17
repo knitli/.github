@@ -86,7 +86,14 @@ that produces unknown/incomplete, never a completed receipt.
 ## Receipt and failure semantics
 
 The host binds SDK initialization and every stream message to a fresh session
-UUID. It accepts exactly one terminal success with `is_error: false`,
+UUID. The requested model must be an explicit versioned Claude identifier, not a
+short or `latest` alias. Initialization must report a nonempty model identity exactly equal to the
+requested `--model`; aliases resolving to another identity are refused. The
+terminal `modelUsage` must contain exactly that model key. Explicit
+`model_refusal_fallback` events or additional/missing/different usage model keys
+refuse completion. This strict identity policy has offline fixture coverage;
+the SDK types do not establish canonical usage-key behavior for every provider,
+so live compatibility remains unqualified. It accepts exactly one terminal success with `is_error: false`,
 `terminal_reason: completed`, no permission denials/deferred tool use, all pages
 served, a closed JSON report, and clean stream termination. Findings must name a
 captured file side and an existing line. Free text, extra report fields, provider
@@ -100,7 +107,9 @@ refuses completion. A receipt additionally requires a clean zero-status child
 exit. The host atomically publishes a read-only receipt using a no-clobber hard link
 from a private staging directory. An existing output is never overwritten. The
 receipt binds the full snapshot digest, manifest digest, session, terminal UUID,
-coverage counts, SDK version, and advisory report. Callers must treat any nonzero
+coverage counts, SDK version, requested model, validated initialization model
+(`resolvedModel`), validated usage model keys (`usageModels`), and advisory report.
+These fields attest runtime-reported identity, not independent provider identity. Callers must treat any nonzero
 exit as unknown, even if an older file exists at their chosen output path. Use a
 fresh output path per attempt. Read-only mode is not tamper-proof against the
 filesystem owner.

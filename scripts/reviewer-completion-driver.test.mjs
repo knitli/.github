@@ -128,7 +128,15 @@ async function fakeRun(mode = 'success', overrides = {}, finding) {
       options = input.options;
       const stream = (async function* () {
         const id = options.sessionId;
-        if (mode !== 'no_init') yield { type: 'system', subtype: 'init', session_id: id, tools: mode === 'rogue_tool' ? ['Bash'] : ['mcp__frozen__read_next'] };
+        const init = { type: 'system', subtype: 'init', session_id: id, model: 'claude-sonnet-4-6',
+          tools: mode === 'rogue_tool' ? ['Bash'] : ['mcp__frozen__read_next'] };
+        if (mode === 'missing_model') delete init.model;
+        if (mode === 'malformed_model') init.model = { name: options.model };
+        if (mode === 'empty_model') init.model = '';
+        if (mode === 'mismatched_model') init.model = 'claude-opus-4-6';
+        if (mode !== 'no_init') yield init;
+        if (mode === 'model_fallback') yield { type: 'system', subtype: 'model_refusal_fallback', session_id: id,
+          original_model: init.model, fallback_model: 'claude-opus-4-6' };
         if (mode === 'timeout') { await new Promise(() => {}); return; }
         if (mode !== 'omitted_coverage') {
           let remaining;
@@ -142,7 +150,12 @@ async function fakeRun(mode = 'success', overrides = {}, finding) {
         if (mode === 'bad_report') report.approved = true;
         if (mode === 'bad_finding') report.findings.push({ path: '/outside', side: 'after', line: 1, severity: 'high', message: 'bad' });
         const terminal = { type: 'result', subtype: mode === 'max_turns' ? 'error_max_turns' : 'success', is_error: mode === 'error',
-          terminal_reason: 'completed', permission_denials: [], session_id: mode === 'wrong_session' ? 'different' : id, uuid: 'terminal-uuid', result: JSON.stringify(report) };
+          modelUsage: { 'claude-sonnet-4-6': {} }, terminal_reason: 'completed', permission_denials: [], session_id: mode === 'wrong_session' ? 'different' : id, uuid: 'terminal-uuid', result: JSON.stringify(report) };
+        if (mode === 'missing_usage_model') delete terminal.modelUsage;
+        if (mode === 'malformed_usage_model') terminal.modelUsage = ['claude-sonnet-4-6'];
+        if (mode === 'empty_usage_model') terminal.modelUsage = {};
+        if (mode === 'mismatched_usage_model') terminal.modelUsage = { 'claude-opus-4-6': {} };
+        if (mode === 'additional_usage_model') terminal.modelUsage['claude-opus-4-6'] = {};
         if (mode === 'missing_session') delete terminal.session_id;
         if (mode === 'deferred') terminal.deferred_tool_use = {};
         yield terminal;
@@ -153,13 +166,16 @@ async function fakeRun(mode = 'success', overrides = {}, finding) {
     },
   };
   const result = await runReview({ bytes, expectedSha256: trustedDigest, sdk, runtimeDirectory: root, binaryPath: join(root, 'claude'),
-    apiKey: 'fake-api-key', model: 'claude-test', timeoutMs: mode === 'timeout' ? 20 : 1000, ...overrides });
+    apiKey: 'fake-api-key', model: 'claude-sonnet-4-6', timeoutMs: mode === 'timeout' ? 20 : 1000, ...overrides });
   return { result, options, closed };
 }
 
 test('binds actual SDK success shape to complete frozen reads and a closed advisory report', async () => {
   const { result, options, closed } = await fakeRun();
   assert.equal(result.status, 'completed');
+  assert.equal(result.requestedModel, options.model);
+  assert.equal(result.resolvedModel, 'claude-sonnet-4-6');
+  assert.deepEqual(result.usageModels, ['claude-sonnet-4-6']);
   assert.equal(result.snapshotSha256, trustedDigest);
   assert.equal(result.coverage.pages, result.coverage.requiredPages);
   assert.equal(result.report.findings.length, 0);
@@ -232,4 +248,22 @@ test('pinned actual SDK normalizes extra read keys without creating semantic inp
   const server = sdk.createSdkMcpServer({ name: 'frozen', tools: [sdk.tool('read_next', 'read', {}, async () => ({ content: [] }))] }).instance;
   assert.deepEqual(await server.validateToolInput(server._registeredTools.read_next, { path: '/etc/passwd' }, 'read_next'), {});
   await assert.rejects(server.validateToolInput(server._registeredTools.read_next, null, 'read_next'));
+});
+
+for (const mode of ['missing_model', 'malformed_model', 'empty_model', 'mismatched_model',
+  'model_fallback', 'missing_usage_model', 'malformed_usage_model', 'empty_usage_model',
+  'mismatched_usage_model', 'additional_usage_model']) {
+  test(`refuses unverified model identity: ${mode}`, async () => {
+    await assert.rejects(fakeRun(mode), /refused: model_identity/);
+  });
+}
+
+test('resolved identity comes from initialization and aliases cannot claim canonical completion', async () => {
+  for (const model of ['sonnet', 'claude-sonnet-4-6-latest', 'claude-opus-4-6']) {
+    await assert.rejects(fakeRun('success', { model }), /refused: model_identity/);
+  }
+  const fixed = { sessionId: '11111111-1111-1111-1111-111111111111' };
+  const before = (await fakeRun('success', fixed)).result;
+  await assert.rejects(fakeRun('mismatched_model', fixed), /refused: model_identity/);
+  assert.deepEqual((await fakeRun('success', fixed)).result, before);
 });
