@@ -7,16 +7,19 @@ const job = { id: 7, run_id: 123, status: 'completed', conclusion: 'success', he
 const page = jobs => [{ total_count: jobs.length, jobs }];
 const inspect = (jobs = [job], r = run) => project(r, page(jobs), {}, null, expected);
 
-test('masked job success retains actual failed step and never proves review completion', () => {
+test('masked job success retains observed failed step without authenticating reviewer identity', () => {
   const result = inspect();
-  assert.equal(result.execution, 'failed');
+  assert.equal(result.execution, 'unknown');
+  assert.equal(result.step.conclusion, 'failure');
+  assert.equal(result.reason, 'unverified-review-job-identity');
   assert.equal(result.job.conclusion, 'success');
   assert.equal(result.reviewCompletion, 'unknown');
 });
-for (const [conclusion, execution] of Object.entries({ success: 'succeeded', skipped: 'skipped', cancelled: 'cancelled', timed_out: 'timed-out', neutral: 'unknown' })) {
-  test(`actual step ${conclusion}`, () => {
+for (const conclusion of ['success', 'skipped', 'cancelled', 'timed_out', 'neutral']) {
+  test(`observed step ${conclusion} is not authenticated reviewer execution`, () => {
     const result = inspect([{ ...job, steps: [{ ...job.steps[0], conclusion }] }]);
-    assert.equal(result.execution, execution);
+    assert.equal(result.execution, 'unknown');
+    assert.equal(result.step.conclusion, conclusion);
     assert.equal(result.reviewCompletion, 'unknown');
   });
 }
@@ -77,5 +80,34 @@ test('collector retains unknown without leaking API errors when acquisition fail
     assert.equal(receipt.execution, 'unknown');
     assert.equal(receipt.reviewCompletion, 'unknown');
     assert.equal(receipt.reason, 'incomplete-acquisition');
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+
+test('caller-controlled matching step cannot impersonate skipped reusable review job', () => {
+  const skippedReview = { ...job, id: 8, name: 'review / review', conclusion: 'skipped', steps: [] };
+  const impersonator = { ...job, name: 'review / review', steps: [{ ...job.steps[0], conclusion: 'success' }] };
+  const result = inspect([skippedReview, impersonator]);
+  assert.equal(result.execution, 'unknown');
+  assert.equal(result.reviewCompletion, 'unknown');
+  assert.equal(result.reason, 'unverified-review-job-identity');
+  assert.equal(result.step.conclusion, 'success');
+});
+
+test('optional PR lookup failure preserves acquired attempt evidence', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'reviewer-pr-offline-'));
+  try {
+    writeFileSync(join(temp, 'event.json'), JSON.stringify({ pull_request: { number: 3, head: { sha: 'a'.repeat(40) }, base: { sha: 'b'.repeat(40) } } }));
+    writeFileSync(join(temp, 'gh'), `#!${process.execPath}\nconst endpoint = process.argv.at(-1);\nif (endpoint.endsWith('/attempts/2')) console.log(process.env.TEST_RUN);\nelse if (endpoint.endsWith('/jobs?per_page=100&page=1')) console.log(process.env.TEST_JOBS);\nelse { console.error('private PR lookup failure'); process.exit(1); }\n`, { mode: 0o700 });
+    const result = spawnSync(process.execPath, [new URL('./reviewer-execution-receipt.mjs', import.meta.url).pathname], { encoding: 'utf8', env: { ...process.env, PATH: temp, GITHUB_REPOSITORY: expected.repository, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2', GITHUB_EVENT_PATH: join(temp, 'event.json'), RECEIPT_PATH: join(temp, 'receipt.json'), TEST_RUN: JSON.stringify(run), TEST_JOBS: JSON.stringify(page([job])[0]) } });
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    const receipt = JSON.parse(readFileSync(join(temp, 'receipt.json'), 'utf8'));
+    assert.equal(receipt.job.id, job.id);
+    assert.equal(receipt.step.conclusion, 'failure');
+    assert.equal(receipt.candidate.eventHead, 'a'.repeat(40));
+    assert.equal(receipt.candidate.observedHead, null);
+    assert.equal(receipt.reason, 'unverified-review-job-identity');
+    assert.equal(receipt.execution, 'unknown');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });

@@ -639,19 +639,23 @@ If organization members are routinely being told they need to sign the CLA, ther
 
 `claude-pr-reviewer.yml` retains `reviewer-execution-RUN_ID-ATTEMPT` for 30 days.
 The separate collector job reads GitHub's [attempt-specific jobs API](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt),
-including every page, and records the named Claude step's **reported execution
-conclusion**, even when the aggregate job succeeds. A skipped step is recorded
-as skipped; a missing step, partial read, ambiguous match or unavailable API stays
-unknown. Successful execution is not proof of provider success, complete review,
-absence of findings, or merge approval. `reviewCompletion` is always `unknown`.
-The API may itself expose only a masked conclusion; no provider result is inferred.
+including every page, and retains the matching step's **reported conclusion**
+for attention. Caller workflows control display names, and this API does not
+attest which reusable-workflow job owns a matched step. Even a unique match can
+be an unrelated job while the real review is skipped. Both `execution` and
+`reviewCompletion` therefore remain `unknown`; `job` and `step` are unverified
+matches, never authenticated reviewer identity. Missing or ambiguous matches
+and incomplete reads also stay unknown. The API may expose a masked conclusion;
+no provider result, complete review, absence of findings, or merge approval is inferred.
 
 The collector uses a fresh runner with read-only permissions and no reviewer
 secrets or outputs. It loads its helper from the exact reusable-workflow SHA in
 GitHub's [run-attempt response](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run-attempt),
 never from caller/PR files or a mutable branch. Missing or ambiguous producer
 revision prevents collection. Head/base values are webhook and current-PR
-observations, not certified reviewed inputs. Same-head reruns have separate run
+observations, not certified reviewed inputs. Failed optional current-PR reads leave
+current head/base null without discarding acquired attempt/job evidence.
+Same-head reruns have separate run
 attempt identities; this does not define supersession or admission ordering.
 
 Consumers must authenticate the workflow revision and acquisition, retain the

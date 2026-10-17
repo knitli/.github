@@ -33,10 +33,8 @@ export function project(run, pages, event, current, expected) {
   const step = steps[0];
   receipt.job = { id: job.id, status: job.status, conclusion: job.conclusion, headSha: sha(job.head_sha) };
   receipt.step = { number: step.number, status: step.status, conclusion: step.conclusion };
-  if (job.status !== 'completed' || step.status !== 'completed') { receipt.reason = 'execution-not-terminal'; return receipt; }
-  const outcomes = { success: 'succeeded', failure: 'failed', cancelled: 'cancelled', skipped: 'skipped', timed_out: 'timed-out' };
-  receipt.execution = outcomes[step.conclusion] ?? 'unknown';
-  receipt.reason = receipt.execution === 'unknown' ? 'unrecognized-step-conclusion' : 'actual-review-step';
+  // Display names are caller-controlled; the jobs API does not attest the reusable job identity.
+  receipt.reason = 'unverified-review-job-identity';
   return receipt;
 }
 
@@ -63,7 +61,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const pages = collectPages(get, `${endpoint}/jobs`);
     const pr = event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : null);
     let current = null;
-    if (Number.isSafeInteger(pr) && pr > 0) current = get(`repos/${expected.repository}/pulls/${pr}`);
+    if (Number.isSafeInteger(pr) && pr > 0) {
+      try {
+        current = get(`repos/${expected.repository}/pulls/${pr}`);
+      } catch {
+        // Optional live candidate context cannot invalidate acquired attempt evidence.
+      }
+    }
     receipt = project(run, pages, event, current, expected);
     receipt.producerRevision = process.env.RECEIPT_PRODUCER_SHA;
     receipt.observedAt = new Date().toISOString();
