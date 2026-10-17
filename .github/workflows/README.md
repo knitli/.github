@@ -74,6 +74,7 @@ on:
 jobs:
   review:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       id-token: write
@@ -82,6 +83,13 @@ jobs:
 ```
 
 A ready-to-copy caller lives at [`examples/claude-pr-reviewer.yml`](../../examples/claude-pr-reviewer.yml).
+
+The calling job must grant `actions: read` for the execution-receipt bootstrap and
+attempt-specific jobs API. A reusable workflow [cannot elevate the caller token](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#supported-keywords-for-jobs-that-call-a-reusable-workflow).
+Keep this grant in the calling job: a job-level `permissions` mapping replaces
+workflow-level defaults, so omitting `actions` there removes access even if the
+workflow grants it globally. The collector uses `github.token`, not the reviewer's
+App token; adding App-token scopes does not repair the caller permission ceiling.
 
 **Inputs**:
 - `review_alias` (optional): comment mention that triggers an on-demand review (default: `@knitli-review`)
@@ -634,3 +642,49 @@ If organization members are routinely being told they need to sign the CLA, ther
 
 - [GitHub Docs: Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
 - [CLA Setup Guide](../cla-signatures/README.md)
+
+### Reviewer execution receipts
+
+`claude-pr-reviewer.yml` retains `reviewer-execution-RUN_ID-ATTEMPT` for 30 days.
+The separate collector job reads GitHub's [attempt-specific jobs API](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt),
+including every page. The pinned reusable review job exports `check_run_id`,
+`workflow_ref`, and `workflow_sha` directly from GitHub's
+[`job` context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context),
+not from model/step outputs or caller inputs. The separate collector reads these
+through its internal `needs.review.outputs`, requires the same defining workflow
+ref and SHA as itself and the loaded producer, and selects exactly one API job
+by its full `check_run_url` within the requested run attempt. Display names never
+select the job. Within that platform-bound job, the fixed Claude step's API
+conclusion supplies `execution`; `reviewCompletion` always remains `unknown`.
+
+Missing platform identity (including a skipped review job), wrong workflow
+revision, missing/ambiguous job or step, incomplete acquisition, and nonterminal
+execution stay unknown. These job-context properties are unavailable on GitHub
+Enterprise Server; there is no fallback to display-name inference. The API may
+expose a masked conclusion. Successful execution still proves neither provider
+success, complete review, absence of findings, nor merge approval. This is a
+trusted intra-workflow identity binding, not an independently signed receipt.
+
+The collector uses a fresh runner with read-only permissions and no reviewer
+secrets or outputs. It loads its helper from the exact reusable-workflow SHA in
+GitHub's [run-attempt response](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run-attempt),
+never from caller/PR files or a mutable branch. Missing or ambiguous producer
+revision prevents collection. Head/base values are webhook and current-PR
+observations, not certified reviewed inputs. Failed optional current-PR reads leave
+current head/base null without discarding acquired attempt/job evidence.
+Same-head reruns have separate run
+attempt identities; this does not define supersession or admission ordering.
+
+Consumers must authenticate the workflow revision and acquisition, retain the
+receipt bytes and artifact identity, and check complete attempt coverage. An
+artifact name or this JSON alone does not authenticate its producer. Another job
+could publish a conflicting artifact; deletion/expiry, cancellation, missing
+collector execution and upload failure leave evidence unavailable. Cancellation
+may prevent the collector from running and needs later API reconciliation.
+No runtime completion consumer or caller pin is enabled by this change.
+
+Run the offline checks with:
+
+```sh
+node --test scripts/reviewer-execution-receipt.test.mjs
+```

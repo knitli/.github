@@ -9,7 +9,9 @@
 #   .github/workflows/claude-pr-reviewer.yml
 #
 # All triggering, identity, permission down-scoping, and tool gating live in the
-# reusable workflow at knitli/.github. This caller just wires up the events and
+# reusable workflow at knitli/.github. The caller must grant actions: read for
+# execution-receipt bootstrap; the reusable workflow cannot elevate its token.
+# This caller wires up the events and
 # inherits the org-level secrets (KNITLI_AGENT_CLIENT_ID, KNITLI_AGENT_PRIVATE_KEY,
 # CLAUDE_CODE_OAUTH_TOKEN).
 #
@@ -30,6 +32,7 @@ on:
 jobs:
   review:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       id-token: write
