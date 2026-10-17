@@ -161,7 +161,7 @@ test('failed action stays nonblocking without masking the receipt step conclusio
   const action = review.split(`      - name: ${stepName}\n`)[1].split('\n      - name:')[0];
   assert.ok(action, 'the receipt-producing action must exist');
   assert.match(review.split('    steps:')[0], /^    continue-on-error: true$/m);
-  assert.match(source.split('\n  execution-receipt:')[1], /^    if: always\(\)$/m);
+  assert.match(source.split('\n  execution-receipt:')[1], /^    if: \$\{\{ always\(\) && !inputs\.host_qualification \}\}$/m);
   const failedAction = spawnSync(process.execPath, ['-e', 'process.exit(23)']);
   assert.equal(failedAction.status, 23);
   const outcome = failedAction.status === 0 ? 'success' : 'failure';
