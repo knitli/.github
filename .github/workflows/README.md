@@ -74,6 +74,7 @@ on:
 jobs:
   review:
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       id-token: write
@@ -82,6 +83,13 @@ jobs:
 ```
 
 A ready-to-copy caller lives at [`examples/claude-pr-reviewer.yml`](../../examples/claude-pr-reviewer.yml).
+
+The calling job must grant `actions: read` for the execution-receipt bootstrap and
+attempt-specific jobs API. A reusable workflow [cannot elevate the caller token](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#supported-keywords-for-jobs-that-call-a-reusable-workflow).
+Keep this grant in the calling job: a job-level `permissions` mapping replaces
+workflow-level defaults, so omitting `actions` there removes access even if the
+workflow grants it globally. The collector uses `github.token`, not the reviewer's
+App token; adding App-token scopes does not repair the caller permission ceiling.
 
 **Inputs**:
 - `review_alias` (optional): comment mention that triggers an on-demand review (default: `@knitli-review`)

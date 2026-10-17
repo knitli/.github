@@ -175,3 +175,74 @@ test('failed action stays nonblocking without masking the receipt step conclusio
   assert.equal(result.reviewCompletion, 'unknown');
   assert.doesNotMatch(action, /^        continue-on-error:/m);
 });
+
+// Bounded extractor for these checked-in block-style examples, not a general YAML
+// parser. Reject unsupported permission syntax instead of assuming inherited access.
+function block(source, name, indent) {
+  const lines = source.split('\n');
+  const matches = lines.flatMap((line, index) => line === `${' '.repeat(indent)}${name}:` ? [index] : []);
+  assert.ok(matches.length <= 1, `duplicate ${name} block`);
+  if (!matches.length) return null;
+  const start = matches[0] + 1;
+  let end = start;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim() && !line.trimStart().startsWith('#') && line.search(/\S/) <= indent) break;
+    end++;
+  }
+  return lines.slice(start, end).join('\n');
+}
+function permissionMap(source, indent) {
+  const declarations = source.split('\n').filter(line => line.startsWith(`${' '.repeat(indent)}permissions:`));
+  assert.ok(declarations.length <= 1, 'duplicate permissions declaration');
+  if (!declarations.length) return null;
+  assert.equal(declarations[0], `${' '.repeat(indent)}permissions:`, 'expected block permissions mapping');
+  const permissions = {};
+  for (const line of block(source, 'permissions', indent).split('\n')) {
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const match = line.match(new RegExp(`^ {${indent + 2}}([a-z-]+): (read|write|none)(?: +#.*)?$`));
+    assert.ok(match, 'unsupported permission entry');
+    assert.ok(!Object.hasOwn(permissions, match[1]), 'duplicate permission key');
+    permissions[match[1]] = match[2];
+  }
+  return permissions;
+}
+function requireActionsRead(source, jobName) {
+  const jobs = block(source, 'jobs', 0);
+  assert.notEqual(jobs, null, 'missing jobs');
+  const selected = block(jobs, jobName, 2);
+  assert.notEqual(selected, null, `missing job ${jobName}`);
+  // GitHub job mappings replace workflow permissions; omitted scopes become none.
+  const effective = permissionMap(selected, 4) ?? permissionMap(source, 0) ?? {};
+  assert.equal(effective.actions, 'read', `${jobName} must explicitly retain actions: read`);
+}
+const receiptWorkflow = readFileSync(new URL('../.github/workflows/claude-pr-reviewer.yml', import.meta.url), 'utf8');
+const workflowReadme = readFileSync(new URL('../.github/workflows/README.md', import.meta.url), 'utf8');
+const callerReadme = workflowReadme.match(/```yaml\n(# \.github\/workflows\/claude-pr-reviewer\.yml\n[\s\S]*?)\n```/);
+assert.ok(callerReadme, 'missing documented Claude caller');
+const usageHeader = receiptWorkflow.match(/# Usage in your repository[^\n]*\n((?:#(?:[^\n]*)\n)+)/);
+assert.ok(usageHeader, 'missing reusable usage header');
+const commentedCaller = usageHeader[1].split('\n').filter(line => line.startsWith('#   '))
+  .map(line => line.slice(4)).join('\n');
+for (const [name, source] of [
+  ['example caller', readFileSync(new URL('../examples/claude-pr-reviewer.yml', import.meta.url), 'utf8')],
+  ['README caller', callerReadme[1]], ['commented usage caller', commentedCaller],
+]) {
+  test(`${name} grants the Actions API caller permission ceiling`, () => {
+    assert.match(source, /uses: knitli\/\.github\/\.github\/workflows\/claude-pr-reviewer\.yml@/);
+    requireActionsRead(source, 'review');
+  });
+}
+for (const jobName of ['review', 'execution-receipt']) {
+  test(`reusable ${jobName} retains Actions API read permission`, () => requireActionsRead(receiptWorkflow, jobName));
+}
+test('caller permission mutations cannot hide omitted or downgraded job scopes behind workflow inheritance', () => {
+  const inherited = 'permissions:\n  actions: read\njobs:\n  review:\n    uses: reusable\n';
+  requireActionsRead(inherited, 'review');
+  assert.throws(() => requireActionsRead(inherited.replace('  actions: read\n', ''), 'review'));
+  for (const override of ['      contents: read', '      actions: none', '      actions: write']) {
+    const mutated = inherited.replace('    uses:', `    permissions:\n${override}\n    uses:`);
+    assert.throws(() => requireActionsRead(mutated, 'review'));
+  }
+  requireActionsRead(inherited.replace('    uses:', '    permissions:\n      actions: read\n    uses:'), 'review');
+});
