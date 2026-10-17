@@ -86,8 +86,11 @@ function validateReport(raw, digest, snapshot) {
   for (const finding of report.findings) {
     const file = snapshot.files.find(f => f.path === finding?.path);
     if (!exact(finding, ['path', 'side', 'line', 'severity', 'message']) || !file || !['before', 'after'].includes(finding.side)
-      || file[finding.side] === null || !integer(finding.line) || !finding.line || finding.line > file[finding.side].split('\n').length
+      || file[finding.side] === null || !integer(finding.line) || !finding.line
       || !['low', 'medium', 'high', 'critical'].includes(finding.severity) || !text(finding.message) || !finding.message || finding.message.length > 4000) fail('finding');
+    const content = file[finding.side];
+    const lines = content.length ? content.split('\n').length - Number(content.endsWith('\n')) : 0;
+    if (finding.line > lines) fail('finding');
   }
   return report;
 }

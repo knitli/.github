@@ -26,6 +26,7 @@ before(async () => {
   const base = git('rev-parse', 'HEAD');
   await writeFile(join(repo, 'tracked.txt'), 'after café\n');
   await writeFile(join(repo, 'added.txt'), 'new\n');
+  await writeFile(join(repo, 'empty.txt'), '');
   await rm(join(repo, 'deleted.txt'));
   git('add', '--all');
   git('commit', '-qm', 'head');
@@ -117,7 +118,7 @@ test('rejects unknown schema fields even when all envelope digests match', () =>
   assert.throws(() => validateSnapshot(...altered(value => { value.manifest.schema = 'knitli-reviewer-input:v2'; }, true)));
 });
 
-async function fakeRun(mode = 'success', overrides = {}) {
+async function fakeRun(mode = 'success', overrides = {}, finding) {
   const { runReview } = await import('./reviewer-completion-driver.mjs');
   let handler, options, closed = false;
   const sdk = {
@@ -137,6 +138,7 @@ async function fakeRun(mode = 'success', overrides = {}) {
         if (mode === 'throw') throw new Error('provider transport error with secret');
         if (mode === 'no_terminal') return;
         const report = { schema: 'knitli-review-report:v1', snapshotSha256: trustedDigest, findings: [], limitations: ['Unchanged context not captured'] };
+        if (finding) report.findings.push(finding);
         if (mode === 'bad_report') report.approved = true;
         if (mode === 'bad_finding') report.findings.push({ path: '/outside', side: 'after', line: 1, severity: 'high', message: 'bad' });
         const terminal = { type: 'result', subtype: mode === 'max_turns' ? 'error_max_turns' : 'success', is_error: mode === 'error',
@@ -174,6 +176,13 @@ test('binds actual SDK success shape to complete frozen reads and a closed advis
   assert.equal(options.env.GITHUB_TOKEN, undefined);
   assert.equal(options.env.NODE_OPTIONS, undefined);
   assert.deepEqual(Object.keys(options.mcpServers), ['frozen']);
+});
+
+test('findings identify real source lines, excluding phantom trailing EOF elements', async () => {
+  const finding = { path: 'added.txt', side: 'after', line: 1, severity: 'low', message: 'Fixture finding' };
+  assert.equal((await fakeRun('success', {}, finding)).result.report.findings.length, 1);
+  await assert.rejects(fakeRun('success', {}, { ...finding, line: 2 }), /refused: finding/);
+  await assert.rejects(fakeRun('success', {}, { ...finding, path: 'empty.txt' }), /refused: finding/);
 });
 
 for (const mode of ['no_init', 'rogue_tool', 'omitted_coverage', 'denied_tool', 'throw', 'no_terminal', 'bad_report',
