@@ -371,15 +371,15 @@ const attemptFixture = () => ({ repository: 'knitli/demo', repositoryId: 1, runI
 const hashBytes = bytes => createHash('sha256').update(bytes).digest('hex');
 async function evidenceFixture({ mutateContext, stale = false } = {}) {
   const attempt = attemptFixture();
-  let reads = 0;
-  const input = options({ attemptContext: attempt, readCandidate: async () => {
+  let reads = 0, handoff;
+  const input = options({ attemptContext: attempt, onPublished: value => { handoff = value; }, readCandidate: async () => {
     const value = structuredClone(candidate);
     if (stale && ++reads >= 4) value.head.sha = 'f'.repeat(40);
     mutateContext?.(attempt);
     return value;
   } });
   const envelope = await runProducer(input);
-  const handoff = { attempt: attemptFixture(), envelopeSha256: hashBytes(await readFile(join(input.outputDirectory, 'envelope.json'))) };
+  assert.ok(handoff, 'actual producer delivered the host handoff');
   const run = { id: 123, run_attempt: 2, status: 'completed', conclusion: 'success', repository: { id: 1, full_name: 'knitli/demo' },
     referenced_workflows: [{ path: handoff.attempt.workflowRef, sha: handoff.attempt.workflowSha }] };
   const job = { id: 7, run_id: 123, check_run_url: 'https://api.github.com/repos/knitli/demo/check-runs/77',
@@ -402,6 +402,11 @@ test('attempt composition binds independently acquired host digest to exact SDK 
   const h = await evidenceFixture({ mutateContext: context => { context.runAttempt = '9'; } });
   assert.deepEqual(h.envelope.attempt, attemptFixture());
   assert.equal(Object.isFrozen(h.envelope.attempt), true);
+  assert.equal(Object.isFrozen(h.handoff), true);
+  assert.equal(Object.isFrozen(h.handoff.attempt), true);
+  assert.equal(h.handoff.envelopeSha256, hashBytes(await readFile(join(h.input.outputDirectory, 'envelope.json'))));
+  assert.throws(() => { h.handoff.envelopeSha256 = 'f'.repeat(64); }, TypeError);
+  assert.throws(() => { h.handoff.attempt.runAttempt = '9'; }, TypeError);
   const evidence = await composeAttemptEvidence(h.composeOptions);
   assert.equal(evidence.status, 'matched');
   assert.equal(evidence.execution.execution, 'succeeded');
@@ -411,6 +416,86 @@ test('attempt composition binds independently acquired host digest to exact SDK 
   assert.deepEqual(JSON.parse(await readFile(h.composeOptions.outputPath)), evidence);
   assert.equal(h.calls.length, 2);
   await assert.rejects(composeAttemptEvidence(h.composeOptions), /EEXIST/);
+});
+
+test('publication handoff requires host callback and attempt identity before creating artifacts', async () => {
+  let calls = 0;
+  for (const extra of [{ onPublished: null, attemptContext: attemptFixture() },
+    { onPublished: 'untrusted', attemptContext: attemptFixture() }, { onPublished: () => { calls++; } }]) {
+    const input = options({ ...extra, capture: () => { calls++; } });
+    await assert.rejects(runProducer(input), /handoff_arguments/);
+    assert.equal(existsSync(input.outputDirectory), false);
+  }
+  assert.equal(calls, 0);
+});
+
+test('failed producer and incomplete envelope publication never deliver a handoff', async () => {
+  for (const collision of [false, true]) {
+    let callbacks = 0, drivers = 0;
+    const input = options({ attemptContext: attemptFixture(), onPublished: () => { callbacks++; },
+      runDriver: async args => {
+        drivers++;
+        if (!collision) {
+          await writeFile(flagsOf(args)['--receipt'], '{partial');
+          throw new Error('private driver failure');
+        }
+        const result = await writeReceipt(args);
+        await writeFile(join(input.outputDirectory, 'envelope.json'), '{partial');
+        return result;
+      } });
+    if (collision) {
+      await assert.rejects(runProducer(input), /EEXIST/);
+      assert.equal(await readFile(join(input.outputDirectory, 'envelope.json'), 'utf8'), '{partial');
+    } else {
+      const result = await runProducer(input);
+      assert.equal(result.status, 'failed');
+      await committed(input, result);
+      await assert.rejects(access(join(input.outputDirectory, 'completion.json')));
+    }
+    assert.equal(callbacks, 0);
+    assert.equal(drivers, 1);
+  }
+});
+
+test('publication precedes awaited host handoff and the producer returns its existing envelope', async () => {
+  let signalStarted, release, finished = false, captured;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  const input = options({ attemptContext: attemptFixture(), onPublished: async handoff => {
+    captured = handoff;
+    signalStarted();
+    await blocked;
+  } });
+  const pending = runProducer(input).then(result => { finished = true; return result; });
+  await Promise.race([started, pending.then(() => assert.fail('producer settled before host handoff'))]);
+  try {
+    const bytes = await readFile(join(input.outputDirectory, 'envelope.json'));
+    assert.equal(JSON.parse(bytes).status, 'completed');
+    assert.equal(captured.envelopeSha256, hashBytes(bytes));
+    assert.equal((await stat(join(input.outputDirectory, 'envelope.json'))).mode & 0o777, 0o444);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(finished, false);
+  } finally { release(); }
+  await committed(input, await pending);
+});
+
+test('host handoff failure is sanitized and never rolls back or replays published work', async () => {
+  let callbacks = 0, drivers = 0, captured;
+  const input = options({ attemptContext: attemptFixture(), runDriver: args => { drivers++; return writeReceipt(args); },
+    onPublished: async handoff => { callbacks++; captured = handoff; throw new Error('private host token'); } });
+  await assert.rejects(runProducer(input), error => {
+    assert.equal(error.code, 'handoff_failed');
+    assert.equal(error.message, 'Reviewer producer refused: handoff_failed');
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  const bytes = await readFile(join(input.outputDirectory, 'envelope.json'));
+  assert.equal(hashBytes(bytes), captured.envelopeSha256);
+  assert.equal(JSON.parse(bytes).status, 'completed');
+  await access(join(input.outputDirectory, 'completion.json'));
+  await assert.rejects(runProducer(input), /EEXIST/);
+  assert.equal(callbacks, 1);
+  assert.equal(drivers, 1);
 });
 
 test('attempt context is complete and repository-bound before capture; no self-asserted handoff fallback', async () => {
@@ -430,7 +515,7 @@ test('same-head retry and sibling check-run handoffs cannot bind a different pro
   for (const changes of [{ runAttempt: '1' }, { checkRunId: '99' }, { repositoryId: 2 },
     { workflowSha: 'f'.repeat(40), producerRevision: 'f'.repeat(40) }]) {
     const h = await evidenceFixture();
-    Object.assign(h.handoff.attempt, changes);
+    h.composeOptions.readTrustedHandoff = async () => ({ ...h.handoff, attempt: { ...h.handoff.attempt, ...changes } });
     await assert.rejects(composeAttemptEvidence(h.composeOptions), /attempt_mismatch/);
     assert.equal(h.calls.length, 0);
   }
@@ -472,7 +557,7 @@ test('altered bundle or context cannot substitute for independent retained host 
     assert.equal(h.calls.length, 0);
   }
   const h = await evidenceFixture();
-  h.handoff.envelopeSha256 = 'f'.repeat(64);
+  h.composeOptions.readTrustedHandoff = async () => ({ ...h.handoff, envelopeSha256: 'f'.repeat(64) });
   await assert.rejects(composeAttemptEvidence(h.composeOptions), /envelope_digest/);
 });
 
@@ -576,7 +661,7 @@ test('composition revalidates model summary and receipt against configured model
     const { chmod } = await import('node:fs/promises'); await chmod(file, 0o600);
     const bytes = Buffer.from(JSON.stringify(h.envelope));
     await writeFile(file, bytes);
-    h.handoff.envelopeSha256 = hashBytes(bytes);
+    h.composeOptions.readTrustedHandoff = async () => ({ ...h.handoff, envelopeSha256: hashBytes(bytes) });
     await assert.rejects(composeAttemptEvidence(h.composeOptions), /completion_invalid|snapshot_binding/);
     assert.equal(h.calls.length, 0);
     await assert.rejects(access(h.composeOptions.outputPath));

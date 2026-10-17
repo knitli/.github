@@ -17,7 +17,32 @@ The producer freezes these primitives before acquisition and binds them into its
 no-clobber envelope. Snapshot repository ID/name must match. Existing unbound
 local producer calls remain available, but cannot be composed.
 
-After the producer job has terminated, the host calls:
+A trusted host can supply an optional `onPublished` callback to `runProducer`.
+It requires a valid `attemptContext` before any artifacts are created. After a
+completed envelope has been published successfully, the producer awaits
+`onPublished({ attempt, envelopeSha256 })`. Both the handoff and its primitive-only
+attempt object are frozen. The digest comes from the exact bytes used for
+publication, not a later read of a potentially replaced bundle. Existing calls
+without the callback and the returned envelope are unchanged. The CLI does not
+accept a handoff or callback.
+
+The host must retain that callback value through its own protected channel,
+separate from the provider and uploaded bundle. This callback is a trusted host
+capability, not a provider callback or proof that arbitrary local JSON is trusted.
+No protected storage, artifact upload or authenticated hosted handoff is installed
+by this API. A failed producer or unsuccessful publication does not call it.
+Completed historical or unknown-applicability evidence can be handed off, but
+retains that applicability and cannot establish current completion.
+
+Publication and handoff are not transactional. If the callback rejects or throws,
+`runProducer` rejects with the sanitized `handoff_failed` error; the published
+bundle remains. The host may have retained the handoff before throwing. There is
+no automatic callback retry, producer replay, rollback, or exactly-once claim.
+Reusing the same output directory still fails. A process crash between publication
+and handoff can leave a bundle without a protected handoff; do not reconstruct
+trusted evidence by hashing that bundle afterward.
+
+After the entire source workflow run has terminated successfully, the host calls:
 
 ```js
 await composeAttemptEvidence({
@@ -86,6 +111,10 @@ This proves pin/import/failure cleanup, not successful model completion; it
 cannot reach query construction or native spawn. Missing caches or another
 platform skip this test honestly. No downloads or installation are performed.
 
+The composer requires a completed successful source run, so a dependent job in
+that same still-running workflow cannot qualify it. Future hosted composition
+must execute after source-run termination; this gate is unchanged.
+
 Still required for hosted adoption: a reviewed pinned workflow invoking the SDK
 producer, protected platform attempt-context and envelope-digest handoff,
 authenticated artifact/API acquisition, and qualification of that complete path.
@@ -102,3 +131,9 @@ mutants remain historical evidence; they were not rerun for this compatibility
 change. Source was restored before the final green run. Node syntax checks,
 scoped Oxlint checks, and `git diff --check` passed. These are local offline
 results, not hosted provenance or successful provider qualification.
+
+Offline composition fixtures now consume the actual producer publication callback.
+They cover frozen identity, exact published-byte digest, awaited callback ordering,
+partial publication refusal and sanitized callback failure without replay, alongside
+the existing sibling-attempt, digest-substitution, incomplete-acquisition and stale
+candidate cases. These fixtures do not authenticate a hosted handoff.
