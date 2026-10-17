@@ -318,7 +318,8 @@ jobs:
          persist-credentials: false
          submodules: recursive
 
-      - name: Claude PR review
+      - name: Claude PR review (execution receipt v1)
+        id: claude-review
         if: >-
           steps.freshness.outputs.current == 'true' &&
           steps.anthropic-probe.outputs.available == 'true'
@@ -437,3 +438,51 @@ jobs:
             echo ''
             echo 'The reviewer will run again on the next push, or on-demand via the review alias comment.'
           } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  execution-receipt:
+    name: Retain reviewer execution evidence
+    needs: [sanitize, review]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      # This fresh runner never checks out caller/PR code or consumes model outputs.
+      - name: Load collector from the executed reusable workflow revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync, appendFileSync } from 'node:fs';
+          const get = path => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8', timeout: 30000, maxBuffer: 1048576 }));
+          const { GITHUB_REPOSITORY: repo, GITHUB_RUN_ID: id, GITHUB_RUN_ATTEMPT: attempt, RUNNER_TEMP: temp } = process.env;
+          const run = get(`repos/${repo}/actions/runs/${id}/attempts/${attempt}`);
+          if (String(run.id) !== id || String(run.run_attempt) !== attempt || run.repository?.full_name !== repo) throw new Error('Run identity mismatch');
+          const refs = run.referenced_workflows?.filter(w => w.path.startsWith('knitli/.github/.github/workflows/claude-pr-reviewer.yml@')) ?? [];
+          if (refs.length !== 1 || !/^[a-f0-9]{40}$/.test(refs[0].sha)) throw new Error('Unknown producer revision');
+          const revision = refs[0].sha;
+          const file = get(`repos/knitli/.github/contents/scripts/reviewer-execution-receipt.mjs?ref=${revision}`);
+          if (file.encoding !== 'base64' || file.type !== 'file') throw new Error('Missing trusted collector');
+          writeFileSync(`${temp}/reviewer-execution-receipt.mjs`, Buffer.from(file.content, 'base64'));
+          appendFileSync(process.env.GITHUB_ENV, `RECEIPT_PRODUCER_SHA=${revision}\n`);
+          JS
+
+      - name: Collect attempt-specific execution evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECEIPT_PATH: ${{ runner.temp }}/reviewer-execution-receipt.json
+        run: node "${RUNNER_TEMP}/reviewer-execution-receipt.mjs"
+
+      - name: Retain execution receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reviewer-execution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reviewer-execution-receipt.json
+          if-no-files-found: error
+          retention-days: 30
