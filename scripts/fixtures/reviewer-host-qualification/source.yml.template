@@ -1,0 +1,64 @@
+# REVIEW CONTRACT ONLY. Deliberately outside .github/workflows.
+# Caller must be a private knitli repository, manual main dispatch, exact approved source SHA.
+# Call the reviewed claude-pr-reviewer.yml reusable workflow at its immutable approved SHA.
+# These jobs describe a future qualification-only branch in that reusable workflow.
+# Do not copy into production: check-run discovery, hosted runtime and artifact transport are unqualified.
+name: Inactive synthetic reviewer host qualification
+on: workflow_call
+permissions: {}
+jobs:
+  synthetic-producer:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      attempt-json: ${{ steps.capture.outputs.attemptJson }}
+      envelope-sha256: ${{ steps.capture.outputs.envelopeSha256 }}
+    steps:
+      - name: Hosted runtime qualification required
+        run: exit 78
+      - name: Synthetic reviewer handoff qualification
+        id: capture
+        run: |
+          # Trusted host constructs attemptContext from platform metadata and authenticated
+          # current-job check-run discovery. No artifact or child stdout supplies context.
+          # prepareSyntheticProducer({directory: freshHostDirectory, attemptContext})
+          # captureQualificationPublication(options) => host.outputs
+          # Only host.outputs.attemptJson and host.outputs.envelopeSha256 reach GITHUB_OUTPUT.
+          # Upload exactly bundle/{completion,envelope,snapshot}.json with a reviewed pinned action.
+          exit 78
+  seal-host-handoff:
+    if: ${{ false }}
+    needs: synthetic-producer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Hosted runtime qualification required
+        run: exit 78
+      - name: Serialize host-only handoff
+        id: handoff
+        env:
+          PRODUCER_ATTEMPT_JSON: ${{ needs.synthetic-producer.outputs.attempt-json }}
+          PRODUCER_ENVELOPE_SHA256: ${{ needs.synthetic-producer.outputs.envelope-sha256 }}
+        run: |
+          # Fresh job; never download producer files before sealing.
+          # sealQualificationHandoff({producerOutputs: platformNeedsOutputs, platformContext})
+          # Write returned bytes to reviewer-host-handoff.json; host computes digest output.
+          exit 78
+      - name: Attest host-only reviewer handoff
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: reviewer-host-handoff.json
+          subject-digest: sha256:${{ steps.handoff.outputs.sha256 }}
+      - name: Publish qualification transport
+        run: |
+          # Upload exactly host handoff bytes plus steps.attest.outputs.bundle-path.
+          # Reviewed action pin, immutable artifact IDs and extraction bounds required.
+          exit 78

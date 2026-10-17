@@ -1,0 +1,28 @@
+# REVIEW CONTRACT ONLY. Deliberately outside .github/workflows.
+# Separate acquisition run, invoked only after the source attempt has completed successfully.
+name: Inactive completed-run reviewer handoff acquisition
+on: workflow_dispatch
+permissions: {}
+jobs:
+  acquire-completed-source:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Hosted verifier and transport qualification required
+        run: exit 78
+      - name: Verify completed source and compose unavailable synthetic evidence
+        run: |
+          # No id-token, provider credentials, native client or reviewer SDK.
+          # Trusted policy fixes repository + numeric ID, run + attempt,
+          # immutable reusable workflow SHA and approved caller source SHA.
+          # Transport prepares a fixed directory with exactly the three producer files,
+          # plus separately bounded handoff and Sigstore bundle bytes. Never execute artifacts.
+          # acquireQualificationEvidence({directory, outputPath, handoffBytes,
+          #   attestationBytes, expected: trustedPolicy, get: authenticatedGithubGet})
+          # Default verifier is a local macOS-only pin and must refuse this hosted runtime.
+          # Never override verify with test fixtures to make qualification pass.
+          # Required result: unavailable / missing-review-step / unverified / unknown.
+          exit 78
