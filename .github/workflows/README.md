@@ -639,14 +639,23 @@ If organization members are routinely being told they need to sign the CLA, ther
 
 `claude-pr-reviewer.yml` retains `reviewer-execution-RUN_ID-ATTEMPT` for 30 days.
 The separate collector job reads GitHub's [attempt-specific jobs API](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt),
-including every page, and retains the matching step's **reported conclusion**
-for attention. Caller workflows control display names, and this API does not
-attest which reusable-workflow job owns a matched step. Even a unique match can
-be an unrelated job while the real review is skipped. Both `execution` and
-`reviewCompletion` therefore remain `unknown`; `job` and `step` are unverified
-matches, never authenticated reviewer identity. Missing or ambiguous matches
-and incomplete reads also stay unknown. The API may expose a masked conclusion;
-no provider result, complete review, absence of findings, or merge approval is inferred.
+including every page. The pinned reusable review job exports `check_run_id`,
+`workflow_ref`, and `workflow_sha` directly from GitHub's
+[`job` context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context),
+not from model/step outputs or caller inputs. The separate collector reads these
+through its internal `needs.review.outputs`, requires the same defining workflow
+ref and SHA as itself and the loaded producer, and selects exactly one API job
+by its full `check_run_url` within the requested run attempt. Display names never
+select the job. Within that platform-bound job, the fixed Claude step's API
+conclusion supplies `execution`; `reviewCompletion` always remains `unknown`.
+
+Missing platform identity (including a skipped review job), wrong workflow
+revision, missing/ambiguous job or step, incomplete acquisition, and nonterminal
+execution stay unknown. These job-context properties are unavailable on GitHub
+Enterprise Server; there is no fallback to display-name inference. The API may
+expose a masked conclusion. Successful execution still proves neither provider
+success, complete review, absence of findings, nor merge approval. This is a
+trusted intra-workflow identity binding, not an independently signed receipt.
 
 The collector uses a fresh runner with read-only permissions and no reviewer
 secrets or outputs. It loads its helper from the exact reusable-workflow SHA in

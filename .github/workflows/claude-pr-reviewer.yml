@@ -133,6 +133,11 @@ jobs:
 
   review:
     needs: sanitize
+    # Platform context only: model step outputs cannot select the reviewed job.
+    outputs:
+      check_run_id: ${{ job.check_run_id }}
+      workflow_ref: ${{ job.workflow_ref }}
+      workflow_sha: ${{ job.workflow_sha }}
     timeout-minutes: 70
     continue-on-error: true
     # Reviews are quota-heavy. Queue them per caller repository so a stacked-PR
@@ -477,6 +482,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RECEIPT_PATH: ${{ runner.temp }}/reviewer-execution-receipt.json
+          REVIEW_CHECK_RUN_ID: ${{ needs.review.outputs.check_run_id }}
+          REVIEW_WORKFLOW_REF: ${{ needs.review.outputs.workflow_ref }}
+          REVIEW_WORKFLOW_SHA: ${{ needs.review.outputs.workflow_sha }}
+          COLLECTOR_WORKFLOW_REF: ${{ job.workflow_ref }}
+          COLLECTOR_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: node "${RUNNER_TEMP}/reviewer-execution-receipt.mjs"
 
       - name: Retain execution receipt

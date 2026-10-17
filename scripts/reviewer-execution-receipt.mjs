@@ -15,7 +15,7 @@ export function project(run, pages, event, current, expected) {
     // These are observations, never the actual inputs examined by the model.
     candidate: { eventHead: sha(event.pull_request?.head?.sha), eventBase: sha(event.pull_request?.base?.sha),
       observedHead: sha(current?.head?.sha), observedBase: sha(current?.base?.sha) },
-    job: null, step: null,
+    job: null, step: null, executionIdentity: null,
   };
   if (String(run.id) !== expected.runId || String(run.run_attempt) !== expected.runAttempt ||
       run.repository?.full_name !== expected.repository || !Array.isArray(pages) || !pages.length) return receipt;
@@ -24,17 +24,31 @@ export function project(run, pages, event, current, expected) {
   const jobs = pages.flatMap(p => p.jobs);
   if (jobs.length !== total || new Set(jobs.map(j => j.id)).size !== total ||
       jobs.some(j => !Number.isSafeInteger(j.id) || String(j.run_id) !== expected.runId)) return receipt;
-  const matches = jobs.filter(j => Array.isArray(j.steps) && j.steps.some(s => s?.name === stepName));
-  receipt.reason = matches.length > 1 ? 'ambiguous-review-job' : 'missing-review-step';
+  // These values come directly from platform job context inside the pinned reusable workflow.
+  receipt.reason = 'unverified-review-job-identity';
+  if (typeof expected.checkRunId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(expected.checkRunId) ||
+      typeof expected.reviewWorkflowRef !== 'string' ||
+      !expected.reviewWorkflowRef.startsWith('knitli/.github/.github/workflows/claude-pr-reviewer.yml@') ||
+      expected.reviewWorkflowRef !== expected.collectorWorkflowRef ||
+      !sha(expected.reviewWorkflowSha) || expected.reviewWorkflowSha !== expected.collectorWorkflowSha ||
+      expected.reviewWorkflowSha !== expected.producerRevision) return receipt;
+  const checkRunUrl = `https://api.github.com/repos/${expected.repository}/check-runs/${expected.checkRunId}`;
+  const matches = jobs.filter(j => j.check_run_url === checkRunUrl);
+  receipt.reason = matches.length > 1 ? 'ambiguous-review-job' : 'missing-review-job';
   if (matches.length !== 1) return receipt;
   const job = matches[0];
-  const steps = job.steps.filter(s => s?.name === stepName);
+  const steps = Array.isArray(job.steps) ? job.steps.filter(s => s?.name === stepName) : [];
+  if (!steps.length) { receipt.reason = 'missing-review-step'; return receipt; }
   if (steps.length !== 1) { receipt.reason = 'ambiguous-review-step'; return receipt; }
   const step = steps[0];
   receipt.job = { id: job.id, status: job.status, conclusion: job.conclusion, headSha: sha(job.head_sha) };
   receipt.step = { number: step.number, status: step.status, conclusion: step.conclusion };
-  // Display names are caller-controlled; the jobs API does not attest the reusable job identity.
-  receipt.reason = 'unverified-review-job-identity';
+  receipt.executionIdentity = { checkRunId: expected.checkRunId,
+    workflowRef: expected.reviewWorkflowRef, workflowSha: expected.reviewWorkflowSha };
+  if (job.status !== 'completed' || step.status !== 'completed') { receipt.reason = 'execution-not-terminal'; return receipt; }
+  const outcomes = { success: 'succeeded', failure: 'failed', cancelled: 'cancelled', skipped: 'skipped', timed_out: 'timed-out' };
+  receipt.execution = outcomes[step.conclusion] ?? 'unknown';
+  receipt.reason = receipt.execution === 'unknown' ? 'unrecognized-step-conclusion' : 'platform-bound-review-step';
   return receipt;
 }
 
@@ -50,7 +64,11 @@ export function collectPages(get, endpoint) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const expected = { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT };
+  const expected = { repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID,
+    runAttempt: process.env.GITHUB_RUN_ATTEMPT, checkRunId: process.env.REVIEW_CHECK_RUN_ID,
+    reviewWorkflowRef: process.env.REVIEW_WORKFLOW_REF, reviewWorkflowSha: process.env.REVIEW_WORKFLOW_SHA,
+    collectorWorkflowRef: process.env.COLLECTOR_WORKFLOW_REF, collectorWorkflowSha: process.env.COLLECTOR_WORKFLOW_SHA,
+    producerRevision: process.env.RECEIPT_PRODUCER_SHA };
   if (!/^[\w.-]+\/[\w.-]+$/.test(expected.repository) || !/^\d+$/.test(expected.runId) || !/^[1-9]\d*$/.test(expected.runAttempt)) throw new Error('invalid execution identity');
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const get = endpoint => JSON.parse(execFileSync('gh', ['api', '-H', 'X-GitHub-Api-Version: 2026-03-10', endpoint], { encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));

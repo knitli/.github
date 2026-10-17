@@ -1,24 +1,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectPages, project, stepName } from './reviewer-execution-receipt.mjs';
-const expected = { repository: 'knitli/toolshed', runId: '123', runAttempt: '2' };
+const workflowRef = 'knitli/.github/.github/workflows/claude-pr-reviewer.yml@refs/heads/main';
+const revision = 'e'.repeat(40);
+const expected = { repository: 'knitli/toolshed', runId: '123', runAttempt: '2', checkRunId: '77',
+  reviewWorkflowRef: workflowRef, collectorWorkflowRef: workflowRef,
+  reviewWorkflowSha: revision, collectorWorkflowSha: revision, producerRevision: revision };
+const identityEnv = { REVIEW_CHECK_RUN_ID: expected.checkRunId, REVIEW_WORKFLOW_REF: workflowRef,
+  REVIEW_WORKFLOW_SHA: revision, COLLECTOR_WORKFLOW_REF: workflowRef,
+  COLLECTOR_WORKFLOW_SHA: revision, RECEIPT_PRODUCER_SHA: revision };
 const run = { id: 123, run_attempt: 2, repository: { full_name: expected.repository } };
-const job = { id: 7, run_id: 123, status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40), steps: [{ name: stepName, status: 'completed', conclusion: 'failure', number: 4 }] };
+const job = { id: 7, run_id: 123, check_run_url: 'https://api.github.com/repos/knitli/toolshed/check-runs/77', status: 'completed', conclusion: 'success', head_sha: 'a'.repeat(40), steps: [{ name: stepName, status: 'completed', conclusion: 'failure', number: 4 }] };
 const page = jobs => [{ total_count: jobs.length, jobs }];
 const inspect = (jobs = [job], r = run) => project(r, page(jobs), {}, null, expected);
 
-test('masked job success retains observed failed step without authenticating reviewer identity', () => {
+test('platform-bound reviewer job success retains reported failed step', () => {
   const result = inspect();
-  assert.equal(result.execution, 'unknown');
+  assert.equal(result.execution, 'failed');
   assert.equal(result.step.conclusion, 'failure');
-  assert.equal(result.reason, 'unverified-review-job-identity');
+  assert.equal(result.reason, 'platform-bound-review-step');
   assert.equal(result.job.conclusion, 'success');
   assert.equal(result.reviewCompletion, 'unknown');
 });
-for (const conclusion of ['success', 'skipped', 'cancelled', 'timed_out', 'neutral']) {
-  test(`observed step ${conclusion} is not authenticated reviewer execution`, () => {
+for (const [conclusion, execution] of Object.entries({ success: 'succeeded', skipped: 'skipped', cancelled: 'cancelled', timed_out: 'timed-out', neutral: 'unknown' })) {
+  test(`platform-bound step reports ${conclusion} without proving provider completion`, () => {
     const result = inspect([{ ...job, steps: [{ ...job.steps[0], conclusion }] }]);
-    assert.equal(result.execution, 'unknown');
+    assert.equal(result.execution, execution);
     assert.equal(result.step.conclusion, conclusion);
     assert.equal(result.reviewCompletion, 'unknown');
   });
@@ -86,12 +93,48 @@ test('collector retains unknown without leaking API errors when acquisition fail
 
 test('caller-controlled matching step cannot impersonate skipped reusable review job', () => {
   const skippedReview = { ...job, id: 8, name: 'review / review', conclusion: 'skipped', steps: [] };
-  const impersonator = { ...job, name: 'review / review', steps: [{ ...job.steps[0], conclusion: 'success' }] };
+  const impersonator = { ...job, name: 'review / review', check_run_url: 'https://api.github.com/repos/knitli/toolshed/check-runs/99', steps: [{ ...job.steps[0], conclusion: 'success' }] };
   const result = inspect([skippedReview, impersonator]);
   assert.equal(result.execution, 'unknown');
   assert.equal(result.reviewCompletion, 'unknown');
-  assert.equal(result.reason, 'unverified-review-job-identity');
-  assert.equal(result.step.conclusion, 'success');
+  assert.equal(result.reason, 'missing-review-step');
+  assert.equal(result.step, null);
+  const missingIdentity = project(run, page([impersonator]), {}, null, { ...expected, checkRunId: '' });
+  assert.equal(missingIdentity.reason, 'unverified-review-job-identity');
+  assert.equal(missingIdentity.execution, 'unknown');
+});
+
+test('only exact platform check run is selected despite successful sibling and changed display names', () => {
+  const sibling = { ...job, id: 9, check_run_url: 'https://api.github.com/repos/knitli/toolshed/check-runs/99', steps: [{ ...job.steps[0], conclusion: 'success' }] };
+  const result = inspect([sibling, { ...job, name: 'arbitrary display name' }]);
+  assert.equal(result.job.id, job.id);
+  assert.equal(result.execution, 'failed');
+  assert.deepEqual(result.executionIdentity, { checkRunId: '77', workflowRef, workflowSha: revision });
+});
+
+test('missing or changed trusted workflow identity cannot promote execution', () => {
+  for (const changes of [{ checkRunId: undefined }, { checkRunId: '99' },
+    { reviewWorkflowRef: 'attacker/repo/.github/workflows/review.yml@main' },
+    { collectorWorkflowRef: workflowRef + '-other' }, { collectorWorkflowSha: 'f'.repeat(40) },
+    { reviewWorkflowSha: '' }, { producerRevision: 'f'.repeat(40) }]) {
+    const result = project(run, page([job]), {}, null, { ...expected, ...changes });
+    assert.equal(result.execution, 'unknown');
+    assert.equal(result.executionIdentity, null);
+  }
+  for (const url of [undefined, 'https://evil.example/repos/knitli/toolshed/check-runs/77',
+    'https://api.github.com/repos/other/repo/check-runs/77']) assert.equal(inspect([{ ...job, check_run_url: url }]).execution, 'unknown');
+});
+
+test('workflow binds review identity directly to job context and passes only needs outputs', () => {
+  const source = readFileSync(new URL('../.github/workflows/claude-pr-reviewer.yml', import.meta.url), 'utf8');
+  const review = source.split('\n  review:\n')[1].split('    timeout-minutes:')[0];
+  assert.match(review, /check_run_id: \$\{\{ job\.check_run_id \}\}/);
+  assert.match(review, /workflow_ref: \$\{\{ job\.workflow_ref \}\}/);
+  assert.match(review, /workflow_sha: \$\{\{ job\.workflow_sha \}\}/);
+  assert.doesNotMatch(review, /steps\.|inputs\./);
+  assert.match(source, /REVIEW_CHECK_RUN_ID: \$\{\{ needs\.review\.outputs\.check_run_id \}\}/);
+  assert.match(source, /REVIEW_WORKFLOW_REF: \$\{\{ needs\.review\.outputs\.workflow_ref \}\}/);
+  assert.match(source, /REVIEW_WORKFLOW_SHA: \$\{\{ needs\.review\.outputs\.workflow_sha \}\}/);
 });
 
 test('optional PR lookup failure preserves acquired attempt evidence', () => {
@@ -99,7 +142,7 @@ test('optional PR lookup failure preserves acquired attempt evidence', () => {
   try {
     writeFileSync(join(temp, 'event.json'), JSON.stringify({ pull_request: { number: 3, head: { sha: 'a'.repeat(40) }, base: { sha: 'b'.repeat(40) } } }));
     writeFileSync(join(temp, 'gh'), `#!${process.execPath}\nconst endpoint = process.argv.at(-1);\nif (endpoint.endsWith('/attempts/2')) console.log(process.env.TEST_RUN);\nelse if (endpoint.endsWith('/jobs?per_page=100&page=1')) console.log(process.env.TEST_JOBS);\nelse { console.error('private PR lookup failure'); process.exit(1); }\n`, { mode: 0o700 });
-    const result = spawnSync(process.execPath, [new URL('./reviewer-execution-receipt.mjs', import.meta.url).pathname], { encoding: 'utf8', env: { ...process.env, PATH: temp, GITHUB_REPOSITORY: expected.repository, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2', GITHUB_EVENT_PATH: join(temp, 'event.json'), RECEIPT_PATH: join(temp, 'receipt.json'), TEST_RUN: JSON.stringify(run), TEST_JOBS: JSON.stringify(page([job])[0]) } });
+    const result = spawnSync(process.execPath, [new URL('./reviewer-execution-receipt.mjs', import.meta.url).pathname], { encoding: 'utf8', env: { ...process.env, PATH: temp, GITHUB_REPOSITORY: expected.repository, GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2', GITHUB_EVENT_PATH: join(temp, 'event.json'), RECEIPT_PATH: join(temp, 'receipt.json'), TEST_RUN: JSON.stringify(run), TEST_JOBS: JSON.stringify(page([job])[0]), ...identityEnv } });
     assert.equal(result.status, 0);
     assert.equal(result.stderr, '');
     const receipt = JSON.parse(readFileSync(join(temp, 'receipt.json'), 'utf8'));
@@ -107,7 +150,7 @@ test('optional PR lookup failure preserves acquired attempt evidence', () => {
     assert.equal(receipt.step.conclusion, 'failure');
     assert.equal(receipt.candidate.eventHead, 'a'.repeat(40));
     assert.equal(receipt.candidate.observedHead, null);
-    assert.equal(receipt.reason, 'unverified-review-job-identity');
-    assert.equal(receipt.execution, 'unknown');
+    assert.equal(receipt.reason, 'platform-bound-review-step');
+    assert.equal(receipt.execution, 'failed');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
